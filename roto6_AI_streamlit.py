@@ -27,6 +27,9 @@ def load_data(uploaded_file):
     """
     df = pd.read_csv(uploaded_file)
     numeric_cols = df.select_dtypes(include=[np.number]).columns
+    if len(numeric_cols) < 2:
+        st.error("CSVファイルには少なくとも2つの数値列が必要です。")
+        st.stop()
     X = df[numeric_cols].iloc[:, :-1].values  # 特徴量
     y = df[numeric_cols].iloc[:, -1].values   # ラベル
     return np.array(X), np.array(y)
@@ -126,13 +129,13 @@ def get_gemini_predictions(api_key, data):
         "data": data.tolist() if isinstance(data, np.ndarray) else data
     }
 
-    response = requests.post(url, headers=headers, json=payload)
-
-    if response.status_code == 200:
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
         predictions = response.json().get('predictions', [])
         return predictions
-    else:
-        st.error(f"Gemini APIエラー: {response.status_code} {response.text}")
+    except requests.exceptions.RequestException as e:
+        st.error(f"Gemini APIエラー: {e}")
         return []
 
 #############################
@@ -229,6 +232,7 @@ def main():
                 best_params = None
 
                 if analysis_method == "Optuna + ニューラルネットワーク":
+                    st.write("ハイパーパラメータの最適化を開始します...")
                     best_params = optimize_hyperparameters(X_train, y_train, n_classes)
                     st.write("Optuna 最適化結果:", best_params)
                     progress_bar.progress(50)
