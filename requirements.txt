@@ -2,19 +2,19 @@
 # ロト6データ分析アプリケーションに必要なライブラリ
 
 # Streamlit本体
-streamlit==1.23.1
+streamlit>=1.23.1,<2.0.0
 
 # データ解析系ライブラリ
-pandas==2.0.3
-numpy==1.23.5
+pandas>=2.0.3,<3.0.0
+numpy>=1.23.5,<2.0.0
 
 # 機械学習系ライブラリ
-tensorflow==2.11.0
-scikit-learn==1.2.2
-optuna==3.2.0
+tensorflow>=2.11.0,<2.12.0
+scikit-learn>=1.2.2,<1.3.0
+optuna>=3.2.0,<4.0.0
 
 # プロットや可視化
-matplotlib==3.7.2
+matplotlib>=3.7.2,<4.0.0
 
 # HTTPリクエスト
-requests==2.31.0
+requests>=2.31.0,<3.0.0
