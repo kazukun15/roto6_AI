@@ -305,7 +305,7 @@ def main():
                         method=("RF" if analysis_method == "ランダムフォレスト" else "NN")
                     )
 
-                    # モバイルフレンドリーな表示
+                    # 予想番号の表示
                     for i, pred in enumerate(predictions_5sets, start=1):
                         st.markdown(f"### 予想第 {i} 組")
                         numbers = ' '.join([
