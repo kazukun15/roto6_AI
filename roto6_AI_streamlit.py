@@ -80,7 +80,6 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
     """
     Optunaでニューラルネットワークのハイパーパラメータを最適化
     """
-
     def objective(trial):
         units = trial.suggest_int('units', 32, 256, step=32)
         dropout = trial.suggest_float('dropout', 0.1, 0.5, step=0.1)
@@ -161,6 +160,24 @@ class ProgressBarCallback(tf.keras.callbacks.Callback):
         self.progress_bar.progress(progress_rate)
 
 #############################
+# 予想数字の上位6クラスを5組出力
+#############################
+def print_predicted_numbers_top6(prob_array, n=5):
+    """
+    予測確率 (prob_array) から、上位6クラスの数字を5組表示。
+    prob_array.shape: (サンプル数, クラス数)
+    n は表示するサンプル数（5組など）。
+    """
+    st.write("#### 予想される数字（各サンプルの上位6クラス）")
+    for i in range(min(n, prob_array.shape[0])):
+        # 確率が高い順にクラスをソート
+        sorted_indices = np.argsort(prob_array[i])[::-1]
+        top6 = sorted_indices[:6]  # 上位6つ
+        # クラスが 0 始まりの場合、1 を足して「1～クラス数」の表記に
+        top6_plus1 = top6 + 1
+        st.write(f"サンプル{i+1} → 予想数字: {list(top6_plus1)}")
+
+#############################
 # Streamlitアプリケーション
 #############################
 def main():
@@ -223,6 +240,7 @@ def main():
                     status_text.text("Gemini APIからの予測結果を取得...")
 
                     st.write("Gemini APIの予測結果:", predictions)
+                    # ここではAPIの戻り値形式次第で自由に表示
 
                 elif analysis_method == "ニューラルネットワーク (単純)":
                     # ニューラルネットワークで単純に学習
@@ -252,6 +270,10 @@ def main():
                     st.write(f"テストデータでの損失: {loss:.4f}")
                     st.write(f"テストデータでの精度: {accuracy:.4f}")
 
+                    # テストデータの先頭5サンプルから上位6クラスを予想数字として出力
+                    pred_probs = model.predict(X_test[:5])  # shape: (5, n_classes)
+                    print_predicted_numbers_top6(pred_probs, n=5)
+
                 elif analysis_method == "ランダムフォレスト":
                     # ランダムフォレスト学習
                     rf_model = build_rf_model()
@@ -259,13 +281,53 @@ def main():
 
                     # 評価
                     y_pred = rf_model.predict(X_test)
-                    st.write("分類レポート:")
+                    st.write("#### 分類レポート:")
                     st.text(classification_report(y_test.argmax(axis=1), y_pred))
+
+                    # 確率を取得して上位6クラスを5組出力 (クラス数があるときのみ)
+                    if rf_model.n_classes_ > 1:
+                        pred_probs = rf_model.predict_proba(X_test[:5])  # リスト(クラス数が多いと多次元になる)
+                        # ランダムフォレストの predict_proba は「サンプル × (クラス数)」が返ってくる
+                        # ただし 2クラス分類では shape=(5,2) のように1つだけになることも
+                        # マルチクラスを想定している場合にのみ動作
+                        if isinstance(pred_probs, list):
+                            # 各クラスの確率が分割される場合、変形して結合する
+                            pred_probs = np.array(pred_probs).transpose(1, 0)
+                        print_predicted_numbers_top6(pred_probs, n=5)
 
                 elif analysis_method == "Optuna + ニューラルネットワーク":
                     # Optunaでハイパーパラメータ探索
                     best_params = optimize_hyperparameters(X_train, y_train, n_classes)
                     st.write("Optunaで探索された最適パラメータ:", best_params)
+
+                    # 最適パラメータでモデル再構築＆学習例 (任意)
+                    best_model = build_nn_model(
+                        input_dim=X_train.shape[1],
+                        units=best_params['units'],
+                        dropout=best_params['dropout'],
+                        learning_rate=best_params['learning_rate'],
+                        n_classes=n_classes
+                    )
+                    epochs = best_params['epochs']
+                    batch_size = best_params['batch_size']
+
+                    # 進捗バーコールバック（Optuna後に改めて学習するとき）
+                    callback = ProgressBarCallback(progress_bar, epochs)
+
+                    best_model.fit(
+                        X_train, y_train,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        verbose=0,
+                        callbacks=[callback]
+                    )
+
+                    # 評価＆予想数字表示
+                    loss, accuracy = best_model.evaluate(X_test, y_test, verbose=0)
+                    st.write(f"テストデータでの損失: {loss:.4f}")
+                    st.write(f"テストデータでの精度: {accuracy:.4f}")
+                    pred_probs = best_model.predict(X_test[:5])
+                    print_predicted_numbers_top6(pred_probs, n=5)
 
                 # 最終的な進捗を100%に
                 current_progress = 100
