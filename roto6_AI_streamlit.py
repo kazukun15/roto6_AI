@@ -80,6 +80,7 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
     """
     Optunaでニューラルネットワークのハイパーパラメータを最適化
     """
+
     def objective(trial):
         units = trial.suggest_int('units', 32, 256, step=32)
         dropout = trial.suggest_float('dropout', 0.1, 0.5, step=0.1)
@@ -141,18 +142,52 @@ def get_gemini_predictions(api_key, data):
         return []
 
 #############################
+# コールバッククラス
+#############################
+class ProgressBarCallback(tf.keras.callbacks.Callback):
+    """
+    ニューラルネットワーク学習の進捗を
+    Streamlitのプログレスバーに反映させるコールバック
+    """
+    def __init__(self, progress_bar, total_epochs):
+        super().__init__()
+        self.progress_bar = progress_bar
+        self.total_epochs = total_epochs
+        self.current_epoch = 0
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.current_epoch += 1
+        progress_rate = int(100 * self.current_epoch / self.total_epochs)
+        self.progress_bar.progress(progress_rate)
+
+#############################
 # Streamlitアプリケーション
 #############################
 def main():
     st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
     st.title("ロト6データ分析アプリ")
 
+    # プログレスバーとステータス用のUIパーツを準備
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    current_progress = 0
+
     # ファイルアップロード
     uploaded_file = st.file_uploader("CSVファイルをアップロードしてください", type="csv")
     if uploaded_file is not None:
         try:
+            # 進捗を10%に更新
+            current_progress = 10
+            progress_bar.progress(current_progress)
+            status_text.text("CSV読み込み中...")
+
             X, y = load_data(uploaded_file)
             st.success("データを正常に読み込みました！")
+
+            # 進捗を30%に更新
+            current_progress = 30
+            progress_bar.progress(current_progress)
+            status_text.text("前処理を実行中...")
 
             # 分析方法の選択
             analysis_method = st.radio(
@@ -160,19 +195,82 @@ def main():
                 ("ニューラルネットワーク (単純)", "ランダムフォレスト", "Optuna + ニューラルネットワーク", "Gemini API")
             )
 
+            # 分析開始ボタン
             if st.button("分析を開始する"):
                 X_scaled, y_encoded, n_classes = preprocess_data(X, y)
+
+                # 進捗を50%に更新
+                current_progress = 50
+                progress_bar.progress(current_progress)
+                status_text.text("データ分割中...")
+
                 X_train, X_test, y_train, y_test = train_test_split(
                     X_scaled, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded.argmax(axis=1)
                 )
 
+                # 進捗を60%に更新
+                current_progress = 60
+                progress_bar.progress(current_progress)
+                status_text.text("モデルの学習を開始します...")
+
                 if analysis_method == "Gemini API":
                     gemini_api_key = st.secrets["GEMINI_API_KEY"]
                     predictions = get_gemini_predictions(gemini_api_key, X_test)
+
+                    # 進捗を80%に更新
+                    current_progress = 80
+                    progress_bar.progress(current_progress)
+                    status_text.text("Gemini APIからの予測結果を取得...")
+
                     st.write("Gemini APIの予測結果:", predictions)
 
-                else:
-                    st.write("他の分析方法が選択されました")
+                elif analysis_method == "ニューラルネットワーク (単純)":
+                    # ニューラルネットワークで単純に学習
+                    model = build_nn_model(
+                        input_dim=X_train.shape[1],
+                        units=64,
+                        dropout=0.2,
+                        learning_rate=1e-3,
+                        n_classes=n_classes
+                    )
+
+                    # コールバックを用意
+                    epochs = 20
+                    callback = ProgressBarCallback(progress_bar, epochs)
+
+                    # 学習
+                    history = model.fit(
+                        X_train, y_train,
+                        epochs=epochs,
+                        batch_size=32,
+                        verbose=0,
+                        callbacks=[callback]
+                    )
+
+                    # 評価
+                    loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+                    st.write(f"テストデータでの損失: {loss:.4f}")
+                    st.write(f"テストデータでの精度: {accuracy:.4f}")
+
+                elif analysis_method == "ランダムフォレスト":
+                    # ランダムフォレスト学習
+                    rf_model = build_rf_model()
+                    rf_model.fit(X_train, y_train.argmax(axis=1))  # yはOne-Hotなのでargmaxを取る
+
+                    # 評価
+                    y_pred = rf_model.predict(X_test)
+                    st.write("分類レポート:")
+                    st.text(classification_report(y_test.argmax(axis=1), y_pred))
+
+                elif analysis_method == "Optuna + ニューラルネットワーク":
+                    # Optunaでハイパーパラメータ探索
+                    best_params = optimize_hyperparameters(X_train, y_train, n_classes)
+                    st.write("Optunaで探索された最適パラメータ:", best_params)
+
+                # 最終的な進捗を100%に
+                current_progress = 100
+                progress_bar.progress(current_progress)
+                status_text.text("完了しました！")
 
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
