@@ -11,6 +11,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 import optuna
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
+import openai  # OpenAI SDK を利用
 import requests
 
 # oneDNNの最適化を無効化（必要に応じて）
@@ -43,9 +44,11 @@ def preprocess_data(X, y):
     """
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
+    
     # 最新のscikit-learnでは、sparse_output引数を使用します
     encoder = OneHotEncoder(sparse_output=False)
     y_encoded = encoder.fit_transform(y.reshape(-1, 1))
+    
     n_classes = y_encoded.shape[1]
     return X_scaled, y_encoded, n_classes
 
@@ -138,40 +141,33 @@ def get_gemini_predictions(api_key, data):
 
 
 #############################
-# OpenAI o3-mini API呼び出し関数
+# OpenAI o3-mini API呼び出し関数（OpenAI SDK 利用）
 #############################
-def get_openai_o3mini_predictions(api_key, data):
+def get_openai_o3mini_predictions_sdk(api_key, data, reasoning_effort="high"):
     """
-    OpenAI o3-mini APIにデータを送り、予測結果を取得します。
-    
+    OpenAI SDK を利用して、o3-mini APIにデータを送り、予測結果を取得します。
+
     Parameters:
         api_key (str): OpenAI APIの認証キー。
         data (str): 予測に使用するデータ（文字列化されたデータ）。
+        reasoning_effort (str): "low", "medium", "high" の指定。高い場合は o3-mini-high モードとなります。
     
     Returns:
         str: 予測されたテキスト結果。
     """
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        # OpenAIのAPI認証では、ヘッダーに "Bearer <APIキー>" を含めます（参考：https://platform.openai.com/docs/api-reference/authentication）
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
+    # APIキーを設定
+    openai.api_key = api_key
     prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
-    payload = {
-        # 正式なモデルIDは、システムカード等の最新情報に基づき「03-mini-2025-01-31」と指定します
-        "model": "03-mini-2025-01-31",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-        "max_tokens": 150
-    }
     try:
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        result = response.json()
-        prediction_text = result["choices"][0]["message"]["content"]
-        return prediction_text
-    except requests.exceptions.RequestException as e:
+        response = openai.ChatCompletion.create(
+            model="o3-mini",
+            messages=[{"role": "user", "content": prompt}],
+            reasoning_effort=reasoning_effort,  # 例: "high" を指定すれば o3-mini-high が利用される可能性
+            temperature=0.7,
+            max_tokens=150
+        )
+        return response.choices[0].message.content
+    except Exception as e:
         st.error(f"OpenAI o3-mini APIエラー: {e}")
         return ""
 
@@ -227,7 +223,7 @@ def main():
         E[ニューラルネットワーク／ランダムフォレスト学習]
         F[Optunaでハイパーパラメータ最適化]
         G[Gemini API呼び出し]
-        H[OpenAI o3-mini API呼び出し]
+        H[OpenAI o3-mini API呼び出し (SDK利用)]
         I[結果表示]
         
         A --> B
@@ -360,7 +356,8 @@ def main():
                         return
                     # 例としてX_testの先頭サンプルの数値データを文字列に変換して送信
                     sample_data = str(X_test[0].tolist())
-                    prediction = get_openai_o3mini_predictions(openai_api_key, sample_data)
+                    # SDKを利用して呼び出す場合、reasoning_effort パラメータで "high" を指定
+                    prediction = get_openai_o3mini_predictions_sdk(openai_api_key, sample_data, reasoning_effort="high")
                     st.write("#### OpenAI o3-mini APIの予測結果:")
                     st.write(prediction)
 
