@@ -12,12 +12,11 @@ import optuna
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 import requests
-# OpenAI SDK は今回利用しません
 
 # st.set_page_config() は最初に呼び出す必要があります
 st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
 
-# oneDNNの最適化を無効化（必要に応じて）
+# oneDNN の最適化を無効化（必要に応じて）
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 tf.get_logger().setLevel('ERROR')
 
@@ -34,8 +33,8 @@ def load_data(uploaded_file):
     if len(numeric_cols) < 2:
         st.error("CSVファイルには少なくとも2つの数値列が必要です。")
         st.stop()
-    X = df[numeric_cols].iloc[:, :-1].values
-    y = df[numeric_cols].iloc[:, -1].values
+    X = df[numeric_cols].iloc[:, :-1].values  # 特徴量部分
+    y = df[numeric_cols].iloc[:, -1].values   # ラベル部分
     return np.array(X), np.array(y)
 
 
@@ -82,7 +81,7 @@ def build_rf_model():
 
 
 #############################
-# ハイパーパラメータ最適化関数（Optuna 使用）
+# ハイパーパラメータ最適化関数（Optuna使用）
 #############################
 def optimize_hyperparameters(X_train, y_train, n_classes):
     """
@@ -112,15 +111,15 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
 
 
 #############################
-# Gemini API 呼び出し関数
+# Gemini API 呼び出し関数 (認証はクエリパラメータで行う)
 #############################
 def get_gemini_predictions(api_key, data):
     """
     Gemini API にデータを送り、予測結果を取得します。
+    Gemini API では、API キーは URL のクエリパラメータとして渡します。
     """
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {
-        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     payload = {
@@ -172,11 +171,9 @@ def print_predicted_numbers_top6(prob_array, n=5):
 def main():
     st.title("ロト6データ分析アプリ")
 
-    # サイドバー：APIキー入力（今回は OpenAI o3-mini API の部分を削除するので、ここは Gemini API キーのみでも可）
+    # サイドバー：Gemini API キー入力のみを利用（OpenAI o3-mini の組み込みは除外）
     st.sidebar.header("APIキー設定")
-    # openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
     gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
-    # OpenAI の o3-mini は利用しないため、分析方法から除外
 
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -197,7 +194,7 @@ def main():
             progress_bar.progress(current_progress)
             status_text.text("前処理を実行中...")
 
-            # 分析方法から OpenAI o3-mini の項目を削除し、他の分析方法のみを選択
+            # 分析方法は、ニューラルネットワーク、ランダムフォレスト、Optuna、Gemini API の4種類
             analysis_method = st.radio(
                 "分析方法を選択してください",
                 ("ニューラルネットワーク (単純)", "ランダムフォレスト", "Optuna + ニューラルネットワーク", "Gemini API")
