@@ -13,7 +13,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 import requests
 
-# st.set_page_config() は最初に呼び出す必要があります
+# st.set_page_config() は最初に呼び出します
 st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
 
 # oneDNN の最適化を無効化（必要に応じて）
@@ -25,9 +25,6 @@ tf.get_logger().setLevel('ERROR')
 # CSVファイル読み込み＆前処理関数
 #############################
 def load_data(uploaded_file):
-    """
-    CSVファイルを読み込み、数値列のみを抽出し、最後の列をラベルとして返します。
-    """
     df = pd.read_csv(uploaded_file)
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     if len(numeric_cols) < 2:
@@ -39,9 +36,6 @@ def load_data(uploaded_file):
 
 
 def preprocess_data(X, y):
-    """
-    データをスケーリングし、ラベルをOne-Hotエンコードします。
-    """
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     encoder = OneHotEncoder(sparse_output=False)
@@ -54,9 +48,6 @@ def preprocess_data(X, y):
 # ニューラルネットワークモデル構築関数
 #############################
 def build_nn_model(input_dim, units, dropout, learning_rate, n_classes):
-    """
-    全結合ニューラルネットワークモデルを構築します。
-    """
     model = Sequential([
         Dense(units, activation='relu', input_dim=input_dim),
         Dropout(dropout),
@@ -73,20 +64,14 @@ def build_nn_model(input_dim, units, dropout, learning_rate, n_classes):
 # ランダムフォレストモデル構築関数
 #############################
 def build_rf_model():
-    """
-    ランダムフォレストモデルを構築します。
-    """
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     return model
 
 
 #############################
-# ハイパーパラメータ最適化関数（Optuna使用）
+# ハイパーパラメータ最適化関数（Optuna 使用）
 #############################
 def optimize_hyperparameters(X_train, y_train, n_classes):
-    """
-    Optuna を使ってニューラルネットワークのハイパーパラメータを最適化します。
-    """
     def objective(trial):
         units = trial.suggest_int('units', 32, 256, step=32)
         dropout = trial.suggest_float('dropout', 0.1, 0.5, step=0.1)
@@ -111,12 +96,12 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
 
 
 #############################
-# Gemini API 呼び出し関数 (認証はクエリパラメータで行う)
+# Gemini API 呼び出し関数 (修正版：ロト6予測用プロンプト)
 #############################
-def get_gemini_predictions(api_key, data):
+def get_gemini_predictions(api_key, prompt_text):
     """
-    Gemini API にデータを送り、予測結果を取得します。
-    Gemini API では、API キーは URL のクエリパラメータとして渡します。
+    Gemini API に、指定のプロンプトを送り、予測結果を取得します。
+    API キーは URL のクエリパラメータとして渡します。
     """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {
@@ -124,7 +109,7 @@ def get_gemini_predictions(api_key, data):
     }
     payload = {
         "contents": [{
-            "parts": [{"text": "予測を生成するデータを送信"}]
+            "parts": [{"text": prompt_text}]
         }]
     }
     try:
@@ -161,7 +146,7 @@ def print_predicted_numbers_top6(prob_array, n=5):
     for i in range(min(n, prob_array.shape[0])):
         sorted_indices = np.argsort(prob_array[i])[::-1]
         top6 = sorted_indices[:6]
-        top6_plus1 = top6 + 1  # クラスが0始まりの場合は1を加算
+        top6_plus1 = top6 + 1
         st.write(f"サンプル{i+1} → 予想数字: {list(top6_plus1)}")
 
 
@@ -171,7 +156,7 @@ def print_predicted_numbers_top6(prob_array, n=5):
 def main():
     st.title("ロト6データ分析アプリ")
 
-    # サイドバー：Gemini API キー入力のみを利用（OpenAI o3-mini の組み込みは除外）
+    # サイドバー：Gemini API キー入力
     st.sidebar.header("APIキー設定")
     gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
 
@@ -194,7 +179,6 @@ def main():
             progress_bar.progress(current_progress)
             status_text.text("前処理を実行中...")
 
-            # 分析方法は、ニューラルネットワーク、ランダムフォレスト、Optuna、Gemini API の4種類
             analysis_method = st.radio(
                 "分析方法を選択してください",
                 ("ニューラルネットワーク (単純)", "ランダムフォレスト", "Optuna + ニューラルネットワーク", "Gemini API")
@@ -219,7 +203,18 @@ def main():
                     if gemini_api_key == "":
                         st.warning("Gemini API Keyをサイドバーに入力してください。")
                         return
-                    predictions = get_gemini_predictions(gemini_api_key, X_test)
+                    # ロト6の番号を5組予測するためのプロンプトを作成
+                    lottery_prompt = (
+                        "以下は、過去1968回分のロト6抽選結果のCSVデータの一部です。各行は、"
+                        "抽選回、6個の本数字、1個のB数字、セット情報が記録されています。\n"
+                        "例:\n"
+                        "第1回: 本数字: 2, 8, 10, 13, 27, 30、B数字: 39、ｾｯﾄ: A\n"
+                        "第2回: 本数字: 1, 9, 16, 20, 21, 43、B数字: 5、ｾｯﾄ: G\n"
+                        "第3回: 本数字: 1, 5, 15, 31, 36, 38、B数字: 13、ｾｯﾄ: C\n"
+                        "このデータに基づいて、次回のロト6抽選で出現する可能性が高いと思われる"
+                        "本数字6個の組み合わせを、カンマ区切りで5組予測してください。"
+                    )
+                    predictions = get_gemini_predictions(gemini_api_key, lottery_prompt)
                     current_progress = 80
                     progress_bar.progress(current_progress)
                     status_text.text("Gemini APIからの予測結果を取得中...")
