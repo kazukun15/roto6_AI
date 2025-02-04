@@ -16,19 +16,23 @@ import requests
 # --- 基本設定 ---
 st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
 st.title("ロト6データ分析アプリ")
-st.markdown("### 過去の抽選結果データから次回のロト6の予測番号を出力します")
-st.markdown("※ CSVの内容をできるだけ反映させたプロンプトをGemini APIへ送信します。")
+st.markdown("""
+このアプリは、過去のロト6抽選結果のCSVデータに基づいて、  
+次回のロト6抽選で出現する可能性が高いと予想される本数字6個の組み合わせを出力するデモです。  
+※ Gemin APIによる予測と、機械学習（ニューラルネットワーク、ランダムフォレスト、Optuna最適化）の分析を選択できます。  
+※ CSVの形式は「抽選回, 本数字1, 本数字2, ..., 本数字6, B数字, ｾｯﾄ」としてください。
+""")
 
-# oneDNN の最適化を無効化（必要に応じて）
+# --- oneDNNの最適化無効化 ---
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 tf.get_logger().setLevel('ERROR')
 
 # --- サイドバー設定 ---
 st.sidebar.header("【設定】")
 gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password", help="Gemini APIキーを入力してください。")
-st.sidebar.markdown("※ 本番環境ではAPIキーは安全に管理してください。")
+st.sidebar.markdown("※ APIキーは本番環境では安全に管理してください。")
 analysis_method = st.sidebar.radio(
-    "分析方法を選択",
+    "分析方法を選択してください",
     ("ニューラルネットワーク (単純)", "ランダムフォレスト", "Optuna + ニューラルネットワーク", "Gemini API")
 )
 
@@ -36,7 +40,6 @@ analysis_method = st.sidebar.radio(
 def load_data(uploaded_file):
     """
     CSVファイルを読み込み、DataFrameとして返します。
-    CSVは「抽選回、本数字6個、B数字、ｾｯﾄ」が記録されている形式を前提とします。
     """
     df = pd.read_csv(uploaded_file, encoding="utf-8")
     return df
@@ -45,10 +48,9 @@ def load_data(uploaded_file):
 def preprocess_data(X, y):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    encoder = OneHotEncoder(sparse_output=False)
-    y_encoded = encoder.fit_transform(y.reshape(-1, 1))
-    n_classes = y_encoded.shape[1]
-    return X_scaled, y_encoded, n_classes
+    # ここでは、ターゲットは1次元であることを前提とするため、OneHotEncoderは使わずそのまま利用
+    # （本来は分類タスクとして扱う場合、OneHotエンコード等の処理が必要ですが、今回はサンプル数不一致対策として y はそのまま使用）
+    return X_scaled, y
 
 def build_nn_model(input_dim, units, dropout, learning_rate, n_classes):
     model = Sequential([
@@ -127,7 +129,7 @@ def print_predicted_numbers_top6(prob_array, n=5):
     for i in range(min(n, prob_array.shape[0])):
         sorted_indices = np.argsort(prob_array[i])[::-1]
         top6 = sorted_indices[:6]
-        top6_plus1 = top6 + 1  # 0始まりの場合は1を加算
+        top6_plus1 = top6 + 1
         st.write(f"組{i+1}: {', '.join(map(str, top6_plus1))}")
 
 # --- メイン処理 ---
@@ -157,17 +159,17 @@ def main():
                     if gemini_api_key == "":
                         st.warning("Gemini API Keyをサイドバーに入力してください。")
                         return
-                    # CSV全体の内容をテキストとして取得
+                    # CSV全体を文字列として取得（文字数が多い場合は先頭4000文字に切り詰め）
                     csv_text = uploaded_file.getvalue().decode("utf-8")
-                    # 文字数が多すぎる場合は先頭4000文字に切り詰める
                     if len(csv_text) > 4000:
                         csv_text = csv_text[:4000] + "\n...（以下省略）"
                     
-                    # CSVの内容をできるだけ反映させたプロンプトを作成
+                    # CSVの内容をできるだけ反映したプロンプトを作成
+                    total_draws = df.shape[0]
                     lottery_prompt = (
-                        "以下は、過去のロト6抽選結果のCSVデータです。\n"
+                        f"以下は、過去{total_draws}回分のロト6抽選結果のCSVデータです。\n"
                         f"{csv_text}\n\n"
-                        "上記のデータに基づいて、次回のロト6抽選で出現する可能性が高いと予想される"
+                        "上記のデータに基づいて、次回のロト6抽選で出現する可能性が高いと予想される、"
                         "本数字6個の組み合わせを、必ず以下の形式で5組出力してください。\n"
                         "【出力例】\n"
                         "組1: 1, 2, 3, 4, 5, 6\n"
@@ -185,12 +187,13 @@ def main():
                     status_text.text("Gemini APIからの応答取得中...")
                     st.markdown("### Gemini API の予測結果")
                     st.write(predictions)
+                
                 else:
-                    # 機械学習による分析の場合（例として、CSVの2～7列目を本数字、1列目をターゲットとする）
+                    # 機械学習による分析の場合
+                    # CSVの「本数字6個」部分（列2～7）を特徴量 X とし、ターゲットはそのうちの1列目（例）を使用
                     X = df.iloc[:, 1:7].values
-                    y = df.iloc[:, 1].values  # ここでは単純化のため、ターゲットとして1列目を使用
-                    X_scaled, y_encoded, n_classes = preprocess_data(X, y)
-                    # 1次元のラベルとして扱うため、元の y をそのまま使います
+                    y = df.iloc[:, 1].values  # ターゲットは1列目（1次元）
+                    X_scaled, y_processed = preprocess_data(X, y)  # y_processedはそのまま使用せず、元の y を使う
                     X_train, X_test, y_train, y_test = train_test_split(
                         X_scaled, y, test_size=0.2, random_state=42, stratify=y
                     )
