@@ -48,8 +48,7 @@ def load_data(uploaded_file):
 def preprocess_data(X, y):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    # ここでは、ターゲットは1次元であることを前提とするため、OneHotEncoderは使わずそのまま利用
-    # （本来は分類タスクとして扱う場合、OneHotエンコード等の処理が必要ですが、今回はサンプル数不一致対策として y はそのまま使用）
+    # 今回は y をそのまま使う簡易対応
     return X_scaled, y
 
 def build_nn_model(input_dim, units, dropout, learning_rate, n_classes):
@@ -75,6 +74,7 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
         learning_rate = trial.suggest_float('learning_rate', 1e-5, 1e-2, log=True)
         epochs = trial.suggest_int('epochs', 10, 50, step=10)
         batch_size = trial.suggest_int('batch_size', 16, 128, step=16)
+
         model = build_nn_model(
             input_dim=X_train.shape[1],
             units=units,
@@ -85,28 +85,40 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
         model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=0)
         _, accuracy = model.evaluate(X_train, y_train, verbose=0)
         return accuracy
+
     study = optuna.create_study(direction='maximize')
     study.optimize(objective, n_trials=20)
     return study.best_params
 
-# --- Gemini API 呼び出し関数 (プロンプト改善版) ---
+# --- Gemini API 呼び出し関数 (修正版) ---
 def get_gemini_predictions(api_key, prompt_text):
     """
-    Gemini API に、指定のプロンプトを送り予測結果を取得します。
-    API キーは URL のクエリパラメータとして渡します。
+    PaLM (Gemini) API に、指定のプロンプトを送り予測結果を取得します。
+    現行の一般的な使用例として "generateText" を使用。
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # 例: text-bison-001 や chat-bison-001 なども利用可能（要API確認）
+    model_name = "text-bison-001"  # gemini-1.5-flash が使える場合はそちらを指定
+    url = f"https://generativelanguage.googleapis.com/v1beta2/models/{model_name}:generateText?key={api_key}"
+
     headers = {"Content-Type": "application/json"}
+
+    # PaLM API では "prompt" を top-level に置き、"temperature" や "candidate_count" を指定する
     payload = {
-        "contents": [{
-            "parts": [{"text": prompt_text}]
-        }]
+        "prompt": {
+            "text": prompt_text
+        },
+        "temperature": 0.2,
+        "candidate_count": 1
     }
+
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
-        predictions = response.json().get('predictions', [])
-        return predictions
+        # レスポンス本体は "candidates" キーが一般的
+        candidates = response.json().get("candidates", [])
+        # candidates が空でなければ、各候補の "output" に文章が格納されていることが多い
+        outputs = [cand.get("output", "") for cand in candidates]
+        return outputs
     except requests.exceptions.RequestException as e:
         st.error(f"Gemini APIエラー: {e}")
         return []
@@ -118,6 +130,7 @@ class ProgressBarCallback(tf.keras.callbacks.Callback):
         self.progress_bar = progress_bar
         self.total_epochs = total_epochs
         self.current_epoch = 0
+
     def on_epoch_end(self, epoch, logs=None):
         self.current_epoch += 1
         progress_rate = int(100 * self.current_epoch / self.total_epochs)
@@ -159,13 +172,15 @@ def main():
                     if gemini_api_key == "":
                         st.warning("Gemini API Keyをサイドバーに入力してください。")
                         return
-                    # CSV全体を文字列として取得（文字数が多い場合は先頭4000文字に切り詰め）
+                    # CSV全体を文字列として取得（長大すぎる場合は一部のみ使用）
                     csv_text = uploaded_file.getvalue().decode("utf-8")
-                    if len(csv_text) > 4000:
-                        csv_text = csv_text[:4000] + "\n...（以下省略）"
+                    max_chars = 4000  # 適宜変更
+                    if len(csv_text) > max_chars:
+                        csv_text = csv_text[:max_chars] + "\n...（以下省略）"
                     
-                    # CSVの内容をできるだけ反映したプロンプトを作成
+                    # CSVの件数から情報を作成
                     total_draws = df.shape[0]
+                    
                     lottery_prompt = (
                         f"以下は、過去{total_draws}回分のロト6抽選結果のCSVデータです。\n"
                         f"{csv_text}\n\n"
@@ -178,25 +193,39 @@ def main():
                         "組5: 31, 32, 33, 34, 35, 36\n"
                         "※予測が不確実でも必ず5組出力してください。"
                     )
+                    
                     current_progress = 50
                     progress_bar.progress(current_progress)
                     status_text.text("Gemini APIへ予測依頼中...")
+                    
+                    # 修正版Gemini API呼び出し
                     predictions = get_gemini_predictions(gemini_api_key, lottery_prompt)
+                    
                     current_progress = 80
                     progress_bar.progress(current_progress)
                     status_text.text("Gemini APIからの応答取得中...")
+
                     st.markdown("### Gemini API の予測結果")
-                    st.write(predictions)
+                    if predictions:
+                        # 1つの候補だけ返ってくる想定
+                        for i, pred in enumerate(predictions, 1):
+                            st.write(f"候補{i}:")
+                            st.write(pred)
+                    else:
+                        st.warning("APIから有効な予測結果が得られませんでした。")
                 
                 else:
                     # 機械学習による分析の場合
-                    # CSVの「本数字6個」部分（列2～7）を特徴量 X とし、ターゲットはそのうちの1列目（例）を使用
+                    # CSVの「本数字6個」部分（列2～7）を特徴量 X とし、
+                    # ターゲットは便宜上そのうちの1列（例：列2）を使用
                     X = df.iloc[:, 1:7].values
-                    y = df.iloc[:, 1].values  # ターゲットは1列目（1次元）
-                    X_scaled, y_processed = preprocess_data(X, y)  # y_processedはそのまま使用せず、元の y を使う
+                    y = df.iloc[:, 1].values
+                    X_scaled, y_processed = preprocess_data(X, y)
+
                     X_train, X_test, y_train, y_test = train_test_split(
                         X_scaled, y, test_size=0.2, random_state=42, stratify=y
                     )
+                    
                     current_progress = 50
                     progress_bar.progress(current_progress)
                     status_text.text("データ分割中...")
@@ -234,6 +263,7 @@ def main():
                         best_params = optimize_hyperparameters(X_train, y_train, len(np.unique(y)))
                         st.markdown("### Optuna による最適パラメータ")
                         st.write(best_params)
+                        
                         best_model = build_nn_model(
                             input_dim=X_train.shape[1],
                             units=best_params['units'],
