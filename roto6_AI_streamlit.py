@@ -14,10 +14,10 @@ from sklearn.metrics import classification_report
 import requests
 import openai  # OpenAI SDK v1.0.0以降用
 
-# st.set_page_config() はファイルの一番最初に実行する
+# st.set_page_config() は最初に呼び出す必要があります
 st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
 
-# oneDNNの最適化を無効化（必要に応じて）
+# oneDNN の最適化を無効化（必要に応じて）
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 tf.get_logger().setLevel('ERROR')
 
@@ -27,7 +27,8 @@ tf.get_logger().setLevel('ERROR')
 #############################
 def load_data(uploaded_file):
     """
-    CSVファイルを読み込み、数値列のみを抽出し、最後の列をラベルとして返します。
+    CSVファイルを読み込み、数値列のみを抽出し、
+    最後の列をラベルとして返します。
     """
     df = pd.read_csv(uploaded_file)
     numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -45,7 +46,8 @@ def preprocess_data(X, y):
     """
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    encoder = OneHotEncoder(sparse_output=False)  # 最新の scikit-learn では sparse_output を指定
+    # 最新の scikit-learn では、sparse_output を指定します
+    encoder = OneHotEncoder(sparse_output=False)
     y_encoded = encoder.fit_transform(y.reshape(-1, 1))
     n_classes = y_encoded.shape[1]
     return X_scaled, y_encoded, n_classes
@@ -82,7 +84,7 @@ def build_rf_model():
 
 
 #############################
-# ハイパーパラメータ最適化関数（Optuna使用）
+# ハイパーパラメータ最適化関数（Optuna 使用）
 #############################
 def optimize_hyperparameters(X_train, y_train, n_classes):
     """
@@ -139,7 +141,7 @@ def get_gemini_predictions(api_key, data):
 
 
 #############################
-# OpenAI o3-mini API 呼び出し関数 (SDK 利用)
+# OpenAI o3-mini API 呼び出し関数 (SDK 利用版)
 #############################
 def get_openai_o3mini_predictions_sdk(api_key, data, use_high=False):
     """
@@ -148,7 +150,7 @@ def get_openai_o3mini_predictions_sdk(api_key, data, use_high=False):
     Parameters:
         api_key (str): OpenAI API の認証キー。
         data (str): 予測に使用するデータ（文字列化されたデータ）。
-        use_high (bool): Trueの場合は o3-mini-high を利用。
+        use_high (bool): True の場合、o3-mini-high を利用（高い推論モード）。
     
     Returns:
         str: 予測されたテキスト結果。
@@ -193,7 +195,7 @@ def print_predicted_numbers_top6(prob_array, n=5):
     for i in range(min(n, prob_array.shape[0])):
         sorted_indices = np.argsort(prob_array[i])[::-1]
         top6 = sorted_indices[:6]
-        top6_plus1 = top6 + 1  # クラスが0始まりの場合は1を加算
+        top6_plus1 = top6 + 1  # クラスが0始まりの場合は 1 を加算
         st.write(f"サンプル{i+1} → 予想数字: {list(top6_plus1)}")
 
 
@@ -203,7 +205,7 @@ def print_predicted_numbers_top6(prob_array, n=5):
 def main():
     st.title("ロト6データ分析アプリ")
 
-    # サイドバーに API キー入力と高推論モード切替
+    # サイドバー：API キー入力と高推論モード切替
     st.sidebar.header("APIキー設定")
     openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
     gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
@@ -268,7 +270,7 @@ def main():
                     )
                     epochs = 20
                     callback = ProgressBarCallback(progress_bar, epochs)
-                    history = model.fit(
+                    model.fit(
                         X_train, y_train,
                         epochs=epochs,
                         batch_size=32,
@@ -323,6 +325,7 @@ def main():
                     if openai_api_key == "":
                         st.warning("OpenAI API Keyをサイドバーに入力してください。")
                         return
+                    # X_testの先頭サンプルのデータを文字列化して送信
                     sample_data = str(X_test[0].tolist())
                     prediction = get_openai_o3mini_predictions_sdk(openai_api_key, sample_data, use_high=use_high)
                     st.write("#### OpenAI o3-mini APIの予測結果:")
