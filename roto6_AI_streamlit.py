@@ -11,8 +11,8 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 import optuna
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
-import openai  # OpenAI SDK を利用
 import requests
+import openai  # OpenAI SDK (v1.0.0 以降対応)
 
 # oneDNNの最適化を無効化（必要に応じて）
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -45,7 +45,7 @@ def preprocess_data(X, y):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    # 最新のscikit-learnでは、sparse_output引数を使用します
+    # 最新の scikit-learn では、sparse_output 引数を使用します
     encoder = OneHotEncoder(sparse_output=False)
     y_encoded = encoder.fit_transform(y.reshape(-1, 1))
     
@@ -88,7 +88,7 @@ def build_rf_model():
 #############################
 def optimize_hyperparameters(X_train, y_train, n_classes):
     """
-    Optunaを使ってニューラルネットワークのハイパーパラメータを最適化します。
+    Optuna を使ってニューラルネットワークのハイパーパラメータを最適化します。
     """
     def objective(trial):
         units = trial.suggest_int('units', 32, 256, step=32)
@@ -114,11 +114,11 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
 
 
 #############################
-# Gemini API呼び出し関数
+# Gemini API 呼び出し関数
 #############################
 def get_gemini_predictions(api_key, data):
     """
-    Gemini APIにデータを送り、予測結果を取得します。
+    Gemini API にデータを送り、予測結果を取得します。
     """
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
     headers = {
@@ -141,28 +141,26 @@ def get_gemini_predictions(api_key, data):
 
 
 #############################
-# OpenAI o3-mini API呼び出し関数（OpenAI SDK 利用）
+# OpenAI o3-mini API 呼び出し関数 (SDK 利用)
 #############################
-def get_openai_o3mini_predictions_sdk(api_key, data, reasoning_effort="high"):
+def get_openai_o3mini_predictions_sdk(api_key, data, model_variant="o3-mini"):
     """
-    OpenAI SDK を利用して、o3-mini APIにデータを送り、予測結果を取得します。
+    OpenAI SDK を利用して、o3-mini（もしくはモデルを切り替えた場合は o3-mini-high など）の API にデータを送り、予測結果を取得します。
 
     Parameters:
-        api_key (str): OpenAI APIの認証キー。
+        api_key (str): OpenAI API の認証キー。
         data (str): 予測に使用するデータ（文字列化されたデータ）。
-        reasoning_effort (str): "low", "medium", "high" の指定。高い場合は o3-mini-high モードとなります。
+        model_variant (str): 利用するモデル。通常は "o3-mini" を指定。高い推論を利用する場合は "o3-mini-high" と指定可能。
     
     Returns:
         str: 予測されたテキスト結果。
     """
-    # APIキーを設定
     openai.api_key = api_key
     prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
     try:
         response = openai.ChatCompletion.create(
-            model="o3-mini",
+            model=model_variant,
             messages=[{"role": "user", "content": prompt}],
-            reasoning_effort=reasoning_effort,  # 例: "high" を指定すれば o3-mini-high が利用される可能性
             temperature=0.7,
             max_tokens=150
         )
@@ -173,7 +171,7 @@ def get_openai_o3mini_predictions_sdk(api_key, data, reasoning_effort="high"):
 
 
 #############################
-# 学習進捗をStreamlitのプログレスバーに反映するコールバック
+# 学習進捗を Streamlit のプログレスバーに反映するコールバック
 #############################
 class ProgressBarCallback(tf.keras.callbacks.Callback):
     def __init__(self, progress_bar, total_epochs):
@@ -201,18 +199,18 @@ def print_predicted_numbers_top6(prob_array, n=5):
 
 
 #############################
-# Streamlitアプリケーション本体
+# Streamlit アプリケーション本体
 #############################
 def main():
     st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
     st.title("ロト6データ分析アプリ")
 
-    # サイドバーにAPIキー入力欄を追加（ユーザーが直接入力）
+    # サイドバーに API キー入力欄を追加（ユーザーが直接入力）
     st.sidebar.header("APIキー設定")
     openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
     gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
 
-    # ※以下、Mermaid記法による全体フロー図（コメント内）
+    # ※以下、Mermaid 記法による全体フロー図（コメント内）
     """
     ```mermaid
     flowchart TD
@@ -222,8 +220,8 @@ def main():
         D{分析方法の分岐}
         E[ニューラルネットワーク／ランダムフォレスト学習]
         F[Optunaでハイパーパラメータ最適化]
-        G[Gemini API呼び出し]
-        H[OpenAI o3-mini API呼び出し (SDK利用)]
+        G[Gemini API 呼び出し]
+        H[OpenAI o3-mini API 呼び出し (SDK利用)]
         I[結果表示]
         
         A --> B
@@ -356,8 +354,8 @@ def main():
                         return
                     # 例としてX_testの先頭サンプルの数値データを文字列に変換して送信
                     sample_data = str(X_test[0].tolist())
-                    # SDKを利用して呼び出す場合、reasoning_effort パラメータで "high" を指定
-                    prediction = get_openai_o3mini_predictions_sdk(openai_api_key, sample_data, reasoning_effort="high")
+                    # SDK を利用して呼び出し。ここではモデルID "o3-mini" を指定しています。
+                    prediction = get_openai_o3mini_predictions_sdk(openai_api_key, sample_data, model_variant="o3-mini")
                     st.write("#### OpenAI o3-mini APIの予測結果:")
                     st.write(prediction)
 
