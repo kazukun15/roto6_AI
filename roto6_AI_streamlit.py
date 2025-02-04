@@ -12,7 +12,7 @@ import optuna
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 import requests
-import openai  # OpenAI SDK (v1.0.0 以降対応)
+import openai  # OpenAI SDK v1.0.0以降対応
 
 # oneDNNの最適化を無効化（必要に応じて）
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -44,11 +44,9 @@ def preprocess_data(X, y):
     """
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    
-    # 最新の scikit-learn では、sparse_output 引数を使用します
+    # 最新の scikit-learn では sparse_output 引数を使用します
     encoder = OneHotEncoder(sparse_output=False)
     y_encoded = encoder.fit_transform(y.reshape(-1, 1))
-    
     n_classes = y_encoded.shape[1]
     return X_scaled, y_encoded, n_classes
 
@@ -143,23 +141,27 @@ def get_gemini_predictions(api_key, data):
 #############################
 # OpenAI o3-mini API 呼び出し関数 (SDK 利用)
 #############################
-def get_openai_o3mini_predictions_sdk(api_key, data, model_variant="o3-mini"):
+def get_openai_o3mini_predictions_sdk(api_key, data, use_high=False):
     """
-    OpenAI SDK を利用して、o3-mini（もしくはモデルを切り替えた場合は o3-mini-high など）の API にデータを送り、予測結果を取得します。
-
+    OpenAI SDK を利用して、o3-mini もしくは o3-mini-high モデルにデータを送り、予測結果を取得します。
+    
     Parameters:
         api_key (str): OpenAI API の認証キー。
         data (str): 予測に使用するデータ（文字列化されたデータ）。
-        model_variant (str): 利用するモデル。通常は "o3-mini" を指定。高い推論を利用する場合は "o3-mini-high" と指定可能。
+        use_high (bool): True の場合は高い推論（o3-mini-high モード）を利用。
     
     Returns:
         str: 予測されたテキスト結果。
     """
+    # APIキーを設定
     openai.api_key = api_key
     prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
+    # 推論モードに応じたモデルIDを設定（use_high が True なら "o3-mini-high"、False なら "o3-mini"）
+    model_id = "o3-mini-high" if use_high else "o3-mini"
+    
     try:
         response = openai.ChatCompletion.create(
-            model=model_variant,
+            model=model_id,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=150
@@ -205,10 +207,11 @@ def main():
     st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
     st.title("ロト6データ分析アプリ")
 
-    # サイドバーに API キー入力欄を追加（ユーザーが直接入力）
+    # サイドバーに API キー入力欄と高推論切替のチェックボックスを追加
     st.sidebar.header("APIキー設定")
     openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
     gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
+    use_high = st.sidebar.checkbox("高い推論 (o3-mini-high を利用)", value=False)
 
     # ※以下、Mermaid 記法による全体フロー図（コメント内）
     """
@@ -352,10 +355,10 @@ def main():
                     if openai_api_key == "":
                         st.warning("OpenAI API Keyをサイドバーに入力してください。")
                         return
-                    # 例としてX_testの先頭サンプルの数値データを文字列に変換して送信
+                    # 例として X_test の先頭サンプルの数値データを文字列に変換して送信
                     sample_data = str(X_test[0].tolist())
-                    # SDK を利用して呼び出し。ここではモデルID "o3-mini" を指定しています。
-                    prediction = get_openai_o3mini_predictions_sdk(openai_api_key, sample_data, model_variant="o3-mini")
+                    # SDK を利用して呼び出し。チェックボックスの状態により高推論を利用するか切り替え
+                    prediction = get_openai_o3mini_predictions_sdk(openai_api_key, sample_data, use_high=use_high)
                     st.write("#### OpenAI o3-mini APIの予測結果:")
                     st.write(prediction)
 
