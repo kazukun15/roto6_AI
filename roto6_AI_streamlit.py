@@ -22,7 +22,8 @@ st.title("ロト6データ分析アプリ")
 st.markdown("""
 このアプリは、過去のロト6抽選結果のCSVデータに基づいて、  
 次回のロト6抽選で出現する可能性が高いと予想される本数字6個の組み合わせを出力するデモです。  
-※ Gemini APIによる予測と、機械学習（ニューラルネットワーク、ランダムフォレスト、Optuna最適化）の分析を選択できます。  
+※ Gemini APIによる予測と、機械学習（ニューラルネットワーク、ランダムフォレスト、Optuna最適化）の分析、  
+そしてシンプルな【予想機能】（各数字の出現頻度に基づく予測）を実装しています。  
 ※ CSVの形式は「抽選回, 本数字1, 本数字2, ..., 本数字6, B数字, ｾｯﾄ」としてください。
 """)
 
@@ -88,7 +89,7 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
     study.optimize(objective, n_trials=20)
     return study.best_params
 
-# --- Gemini API 呼び出し関数 (gemini-1.5-flash:generateContent版) ---
+# --- Gemini API 呼び出し関数 ---
 def get_gemini_predictions(api_key, prompt_text):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
@@ -131,6 +132,41 @@ def print_predicted_numbers_top6(prob_array, n=5):
         top6 = sorted_indices[:6] + 1
         st.write(f"組{i+1}: {', '.join(map(str, top6))}")
 
+# --- 予想機能：出現頻度に基づく予測 ---
+def predict_by_frequency(df):
+    """
+    CSVの「本数字1」～「本数字6」列（インデックス1～6）を全行対象に
+    各数字の出現頻度を集計し、確率に基づいて重複なく6個の数字を予測します。
+    ※ロト6では数字は通常1～43と仮定します。
+    """
+    # 本数字の列を抽出（CSVの2列目～7列目と仮定）
+    try:
+        number_cols = df.columns[1:7]
+    except Exception as e:
+        st.error("本数字の列が取得できません。CSVの形式を確認してください。")
+        return None
+    # 数値に変換
+    try:
+        numbers = df[number_cols].apply(pd.to_numeric, errors='coerce').values.flatten()
+    except Exception as e:
+        st.error("本数字の列を数値に変換できませんでした。")
+        return None
+    # 有効な数値のみ（NaN除外）
+    numbers = numbers[~pd.isna(numbers)]
+    # 出現回数を集計
+    freq = pd.Series(numbers).value_counts().sort_index()
+    # ロト6は通常1～43の数字とする（数字が存在しない場合は0とする）
+    all_numbers = pd.Series(0, index=np.arange(1, 44))
+    freq = all_numbers.add(freq, fill_value=0)
+    total = freq.sum()
+    if total == 0:
+        st.error("本数字の出現データが存在しません。")
+        return None
+    weights = (freq / total).values
+    # 6個の数字を重複なしでサンプリング（重み付け）
+    predicted = np.random.choice(freq.index, size=6, replace=False, p=weights)
+    return np.sort(predicted)
+
 # --- メイン処理 ---
 def main():
     st.markdown("## CSVファイルアップロード")
@@ -158,12 +194,11 @@ def main():
             progress_bar.progress(current_progress)
             status_text.text("分析準備中...")
             
-            # --- 機械学習の場合（Gemini API以外） ---
-            # ロト6の場合、各抽選回は1行ずつのデータと想定し、全体をそのまま使用します。
-            # 例として、列インデックス1～6（「本数字1」～「本数字6」）を特徴量、
-            # 「本数字1」列をターゲットとする（あくまでサンプル例です）。
+            # --- 機械学習による分析例 ---
+            # 例として、列インデックス1～6（本数字1～本数字6）を特徴量、
+            # 「本数字1」列をターゲットとする（あくまで例です）。
             X = df.iloc[:, 1:7].values
-            y = df.iloc[:, 1].values  # 例：本数字1をターゲットに
+            y = df.iloc[:, 1].values
             X_scaled, y_processed = preprocess_data(X, y)
             X_train, X_test, y_train, y_test = train_test_split(
                 X_scaled, y, test_size=0.2, random_state=42
@@ -178,7 +213,6 @@ def main():
                     if gemini_api_key == "":
                         st.warning("Gemini API Keyをサイドバーに入力してください。")
                         return
-                    # CSV全体を文字列として取得（長大な場合は先頭部分のみ）
                     csv_text = uploaded_file.getvalue().decode("utf-8")
                     max_chars = 4000
                     if len(csv_text) > max_chars:
@@ -209,62 +243,69 @@ def main():
                             st.write(f"【候補{i}】\n{pred}")
                     else:
                         st.warning("APIから有効な予測結果が得られませんでした。")
-                else:
-                    if analysis_method == "ニューラルネットワーク (単純)":
-                        model = build_nn_model(
-                            input_dim=X_train.shape[1],
-                            units=64,
-                            dropout=0.2,
-                            learning_rate=1e-3,
-                            n_classes=len(np.unique(y))
-                        )
-                        epochs = 20
-                        callback = ProgressBarCallback(progress_bar, epochs)
-                        model.fit(
-                            X_train, y_train,
-                            epochs=epochs,
-                            batch_size=32,
-                            verbose=0,
-                            callbacks=[callback]
-                        )
-                        loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
-                        st.markdown("### ニューラルネットワークの評価結果")
-                        st.write(f"テストデータでの損失: {loss:.4f}")
-                        st.write(f"テストデータでの精度: {accuracy:.4f}")
-                    elif analysis_method == "ランダムフォレスト":
-                        rf_model = build_rf_model()
-                        rf_model.fit(X_train, y_train)
-                        y_pred = rf_model.predict(X_test)
-                        st.markdown("### ランダムフォレストの分類レポート")
-                        st.text(classification_report(y_test, y_pred))
-                    elif analysis_method == "Optuna + ニューラルネットワーク":
-                        best_params = optimize_hyperparameters(X_train, y_train, len(np.unique(y)))
-                        st.markdown("### Optuna による最適パラメータ")
-                        st.write(best_params)
-                        best_model = build_nn_model(
-                            input_dim=X_train.shape[1],
-                            units=best_params['units'],
-                            dropout=best_params['dropout'],
-                            learning_rate=best_params['learning_rate'],
-                            n_classes=len(np.unique(y))
-                        )
-                        epochs = best_params['epochs']
-                        batch_size = best_params['batch_size']
-                        callback = ProgressBarCallback(progress_bar, epochs)
-                        best_model.fit(
-                            X_train, y_train,
-                            epochs=epochs,
-                            batch_size=batch_size,
-                            verbose=0,
-                            callbacks=[callback]
-                        )
-                        loss, accuracy = best_model.evaluate(X_test, y_test, verbose=0)
-                        st.markdown("### Optuna + ニューラルネットワークの評価結果")
-                        st.write(f"テストデータでの損失: {loss:.4f}")
-                        st.write(f"テストデータでの精度: {accuracy:.4f}")
+                elif analysis_method == "ニューラルネットワーク (単純)":
+                    model = build_nn_model(
+                        input_dim=X_train.shape[1],
+                        units=64,
+                        dropout=0.2,
+                        learning_rate=1e-3,
+                        n_classes=len(np.unique(y))
+                    )
+                    epochs = 20
+                    callback = ProgressBarCallback(progress_bar, epochs)
+                    model.fit(
+                        X_train, y_train,
+                        epochs=epochs,
+                        batch_size=32,
+                        verbose=0,
+                        callbacks=[callback]
+                    )
+                    loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+                    st.markdown("### ニューラルネットワークの評価結果")
+                    st.write(f"テストデータでの損失: {loss:.4f}")
+                    st.write(f"テストデータでの精度: {accuracy:.4f}")
+                elif analysis_method == "ランダムフォレスト":
+                    rf_model = build_rf_model()
+                    rf_model.fit(X_train, y_train)
+                    y_pred = rf_model.predict(X_test)
+                    st.markdown("### ランダムフォレストの分類レポート")
+                    st.text(classification_report(y_test, y_pred))
+                elif analysis_method == "Optuna + ニューラルネットワーク":
+                    best_params = optimize_hyperparameters(X_train, y_train, len(np.unique(y)))
+                    st.markdown("### Optuna による最適パラメータ")
+                    st.write(best_params)
+                    best_model = build_nn_model(
+                        input_dim=X_train.shape[1],
+                        units=best_params['units'],
+                        dropout=best_params['dropout'],
+                        learning_rate=best_params['learning_rate'],
+                        n_classes=len(np.unique(y))
+                    )
+                    epochs = best_params['epochs']
+                    batch_size = best_params['batch_size']
+                    callback = ProgressBarCallback(progress_bar, epochs)
+                    best_model.fit(
+                        X_train, y_train,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        verbose=0,
+                        callbacks=[callback]
+                    )
+                    loss, accuracy = best_model.evaluate(X_test, y_test, verbose=0)
+                    st.markdown("### Optuna + ニューラルネットワークの評価結果")
+                    st.write(f"テストデータでの損失: {loss:.4f}")
+                    st.write(f"テストデータでの精度: {accuracy:.4f}")
                 current_progress = 100
                 progress_bar.progress(current_progress)
                 status_text.text("処理完了！")
+            
+            # --- 予想機能（出現頻度に基づくシンプル予測） ---
+            if st.button("予想機能を実行する"):
+                predicted_numbers = predict_by_frequency(df)
+                if predicted_numbers is not None:
+                    st.markdown("### 次回の予想数字")
+                    st.write(", ".join(map(str, predicted_numbers)))
+            
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
     else:
