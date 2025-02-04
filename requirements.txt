@@ -1,9 +1,8 @@
 streamlit
-folium
-streamlit-folium
+pandas
 numpy
-scikit-image
-branca
-scikit-learn
 tensorflow
+scikit-learn
 optuna
+requests
+
