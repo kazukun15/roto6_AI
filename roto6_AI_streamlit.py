@@ -13,7 +13,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 import requests
 
-# st.set_page_config() は最初に呼び出します
+# st.set_page_config() は最初に呼び出す必要があります
 st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
 
 # oneDNN の最適化を無効化（必要に応じて）
@@ -25,17 +25,27 @@ tf.get_logger().setLevel('ERROR')
 # CSVファイル読み込み＆前処理関数
 #############################
 def load_data(uploaded_file):
+    """
+    CSVファイルを読み込み、数値列のみを抽出し、最後の列をラベルとして返します。
+    ※ CSV は「抽選回、本数字6個、B数字、ｾｯﾄ」が記録されている形式とする。
+    """
     df = pd.read_csv(uploaded_file)
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     if len(numeric_cols) < 2:
         st.error("CSVファイルには少なくとも2つの数値列が必要です。")
         st.stop()
-    X = df[numeric_cols].iloc[:, :-1].values  # 特徴量部分
-    y = df[numeric_cols].iloc[:, -1].values   # ラベル部分
+    # 本数字部分は、先頭列（抽選回）以降、直近6列を本数字として扱う前提
+    # ※CSVの形式に合わせて適宜調整してください
+    X = df[numeric_cols].iloc[:, 1:7].values  
+    y = df[numeric_cols].iloc[:, 1:7].values   # ここでは前処理用に本数字部分を使う例です
     return np.array(X), np.array(y)
 
 
 def preprocess_data(X, y):
+    """
+    データをスケーリングし、ラベルをOne-Hotエンコードします。
+    ※ここではシンプルにスケーリングのみを行っています。
+    """
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     encoder = OneHotEncoder(sparse_output=False)
@@ -69,7 +79,7 @@ def build_rf_model():
 
 
 #############################
-# ハイパーパラメータ最適化関数（Optuna 使用）
+# ハイパーパラメータ最適化関数（Optuna使用）
 #############################
 def optimize_hyperparameters(X_train, y_train, n_classes):
     def objective(trial):
@@ -96,12 +106,14 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
 
 
 #############################
-# Gemini API 呼び出し関数 (修正版：ロト6予測用プロンプト)
+# Gemini API 呼び出し関数（プロンプト改善版）
 #############################
 def get_gemini_predictions(api_key, prompt_text):
     """
-    Gemini API に、指定のプロンプトを送り、予測結果を取得します。
+    Gemini API に、指定のプロンプトを送り予測結果を取得します。
     API キーは URL のクエリパラメータとして渡します。
+    
+    prompt_text: ユーザーに提示する、ロト6抽選結果を基にした予測依頼の文章
     """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {
@@ -179,6 +191,7 @@ def main():
             progress_bar.progress(current_progress)
             status_text.text("前処理を実行中...")
 
+            # 分析方法選択（Gemini API と機械学習による分析を選択可能）
             analysis_method = st.radio(
                 "分析方法を選択してください",
                 ("ニューラルネットワーク (単純)", "ランダムフォレスト", "Optuna + ニューラルネットワーク", "Gemini API")
@@ -203,16 +216,22 @@ def main():
                     if gemini_api_key == "":
                         st.warning("Gemini API Keyをサイドバーに入力してください。")
                         return
-                    # ロト6の番号を5組予測するためのプロンプトを作成
+                    # 過去のロト6抽選結果データに基づく予測依頼のプロンプトを作成
                     lottery_prompt = (
                         "以下は、過去1968回分のロト6抽選結果のCSVデータの一部です。各行は、"
-                        "抽選回、6個の本数字、1個のB数字、セット情報が記録されています。\n"
+                        "抽選回、6個の本数字、1個のB数字、セット情報を示しています。\n"
                         "例:\n"
-                        "第1回: 本数字: 2, 8, 10, 13, 27, 30、B数字: 39、ｾｯﾄ: A\n"
-                        "第2回: 本数字: 1, 9, 16, 20, 21, 43、B数字: 5、ｾｯﾄ: G\n"
-                        "第3回: 本数字: 1, 5, 15, 31, 36, 38、B数字: 13、ｾｯﾄ: C\n"
-                        "このデータに基づいて、次回のロト6抽選で出現する可能性が高いと思われる"
-                        "本数字6個の組み合わせを、カンマ区切りで5組予測してください。"
+                        "第1回: 本数字: 2, 8, 10, 13, 27, 30; B数字: 39; セット: A\n"
+                        "第2回: 本数字: 1, 9, 16, 20, 21, 43; B数字: 5; セット: G\n"
+                        "第3回: 本数字: 1, 5, 15, 31, 36, 38; B数字: 13; セット: C\n"
+                        "これらのデータに基づいて、次回のロト6抽選で出現する可能性が高いと予想される"
+                        "本数字の6個の組み合わせを、必ず以下の形式で5組出力してください。\n"
+                        "【出力例】\n"
+                        "組1: 1, 2, 3, 4, 5, 6\n"
+                        "組2: 7, 8, 9, 10, 11, 12\n"
+                        "…\n"
+                        "組5: 31, 32, 33, 34, 35, 36\n"
+                        "※予測が不確実でも必ず5組出力してください。"
                     )
                     predictions = get_gemini_predictions(gemini_api_key, lottery_prompt)
                     current_progress = 80
