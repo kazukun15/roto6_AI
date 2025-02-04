@@ -2,6 +2,7 @@ import os
 import streamlit as st
 import pandas as pd
 import numpy as np
+import math
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
@@ -10,8 +11,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 import optuna
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, r2_score
 import requests
+from joblib import dump, load
+from sklearn.utils.class_weight import compute_sample_weight
 
 # --- 基本設定 ---
 st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
@@ -19,7 +22,7 @@ st.title("ロト6データ分析アプリ")
 st.markdown("""
 このアプリは、過去のロト6抽選結果のCSVデータに基づいて、  
 次回のロト6抽選で出現する可能性が高いと予想される本数字6個の組み合わせを出力するデモです。  
-※ Gemin APIによる予測と、機械学習（ニューラルネットワーク、ランダムフォレスト、Optuna最適化）の分析を選択できます。  
+※ Gemini APIによる予測と、機械学習（ニューラルネットワーク、ランダムフォレスト、Optuna最適化）の分析を選択できます。  
 ※ CSVの形式は「抽選回, 本数字1, 本数字2, ..., 本数字6, B数字, ｾｯﾄ」としてください。
 """)
 
@@ -48,7 +51,6 @@ def load_data(uploaded_file):
 def preprocess_data(X, y):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    # 今回は y をそのまま使う簡易対応
     return X_scaled, y
 
 def build_nn_model(input_dim, units, dropout, learning_rate, n_classes):
@@ -74,7 +76,6 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
         learning_rate = trial.suggest_float('learning_rate', 1e-5, 1e-2, log=True)
         epochs = trial.suggest_int('epochs', 10, 50, step=10)
         batch_size = trial.suggest_int('batch_size', 16, 128, step=16)
-
         model = build_nn_model(
             input_dim=X_train.shape[1],
             units=units,
@@ -85,19 +86,12 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
         model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=0)
         _, accuracy = model.evaluate(X_train, y_train, verbose=0)
         return accuracy
-
     study = optuna.create_study(direction='maximize')
     study.optimize(objective, n_trials=20)
     return study.best_params
 
 # --- Gemini API 呼び出し関数 (gemini-1.5-flash 版) ---
 def get_gemini_predictions(api_key, prompt_text):
-    """
-    Gemini (gemini-1.5-flash:generateContent) に指定のプロンプトを送り、
-    生成テキスト（複数行）をリストとして返します。
-    
-    事前に cURL でも同じエンドポイントを呼び出して200が返っていることが前提。
-    """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     payload = {
@@ -109,18 +103,6 @@ def get_gemini_predictions(api_key, prompt_text):
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
-        
-        # data の中身は下記のような構造が期待される (2025年現在の想定例):
-        # {
-        #   "contents": [
-        #     {
-        #       "parts": [
-        #         { "text": "ここにモデル応答のテキスト" }
-        #       ]
-        #     }
-        #   ]
-        # }
-        # 実際に返るJSON構造は必ず print(data) 等でご確認ください。
         result_texts = []
         contents = data.get("contents", [])
         for content_item in contents:
@@ -130,7 +112,6 @@ def get_gemini_predictions(api_key, prompt_text):
                 if text_val:
                     result_texts.append(text_val)
         return result_texts
-
     except requests.exceptions.RequestException as e:
         st.error(f"Gemini APIエラー: {e}")
         return []
@@ -142,7 +123,6 @@ class ProgressBarCallback(tf.keras.callbacks.Callback):
         self.progress_bar = progress_bar
         self.total_epochs = total_epochs
         self.current_epoch = 0
-
     def on_epoch_end(self, epoch, logs=None):
         self.current_epoch += 1
         progress_rate = int(100 * self.current_epoch / self.total_epochs)
@@ -171,25 +151,77 @@ def main():
             status_text.text("CSV読み込み中...")
             df = load_data(uploaded_file)
             st.success("CSVデータを正常に読み込みました！")
-            
             with st.expander("CSVデータプレビュー"):
                 st.dataframe(df.head(10))
-            
             current_progress = 30
             progress_bar.progress(current_progress)
             status_text.text("分析準備中...")
             
+            # ----- グループ分割（分子ID "cmp1" によりグループ化） -----
+            # グループごとに分割し、サンプル数が1件のみのグループは後で全てトレーニングに追加
+            grouped = df.groupby('cmp1')
+            dfs = {key: group for key, group in grouped}
+            # 分子を2群に分割：複数サンプルを持つもの（>=2）と1サンプルのみのもの
+            multi_sample = {k: v for k, v in dfs.items() if len(v) > 1}
+            single_sample = {k: v for k, v in dfs.items() if len(v) == 1}
+            
+            # 複数サンプルを持つ分子について、従来のルールで分割
+            train_dfs_multi = {}
+            test_dfs_multi = {}
+            for key, item in multi_sample.items():
+                n = len(item)
+                if n > 4:
+                    train_size = math.floor(0.95 * n)
+                    test_size = n - train_size
+                    if test_size > 0:
+                        train_df, test_df = item.iloc[:train_size, :], item.iloc[train_size:, :]
+                    else:
+                        train_df, test_df = item.iloc[:train_size, :], pd.DataFrame(columns=df.columns.drop('cmp1'))
+                elif n == 4:
+                    train_df, test_df = item.iloc[:3, :], item.iloc[3:, :]
+                elif n == 3:
+                    train_df, test_df = item.iloc[:2, :], item.iloc[2:, :]
+                elif n == 2:
+                    train_df, test_df = item.iloc[:1, :], item.iloc[1:, :]
+                train_dfs_multi[key] = train_df
+                test_dfs_multi[key] = test_df
+            
+            # 単一サンプルのみの分子はすべてトレーニングセットに追加
+            train_dfs_single = single_sample
+            
+            # 連結して最終的なトレーニングデータとテストデータを作成
+            train_df_final = pd.concat(list(train_dfs_multi.values()) + list(train_dfs_single.values()))
+            # テストは複数サンプルのみの分子から
+            test_df_final = pd.concat(list(test_dfs_multi.values())) if test_dfs_multi else pd.DataFrame(columns=df.columns)
+            # ----- データ分割終了 -----
+            
+            # 更新した進捗
+            current_progress = 50
+            progress_bar.progress(current_progress)
+            status_text.text("Gemini API/機械学習用データ準備中...")
+            
+            # ここでは例として、機械学習分析用の処理（CSV中の数値データを使用）
+            # ※CSVの列構成に合わせて、特徴量・ターゲットの指定を行ってください
+            # ここでは例として、列インデックス 1～6 を特徴量、1列目をターゲットとして使用
+            X = train_df_final.iloc[:, 1:7].values
+            y = train_df_final.iloc[:, 1].values  # ターゲットは例として1列目
+            X_scaled, y_processed = preprocess_data(X, y)
+            # ※ stratify を使用した分割が不要な場合は、単純に分割
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_scaled, y, test_size=0.2, random_state=42
+            )
+            
+            # 以下、選択した分析方法に応じた処理
             if st.button("分析を開始する"):
                 if analysis_method == "Gemini API":
                     if gemini_api_key == "":
                         st.warning("Gemini API Keyをサイドバーに入力してください。")
                         return
-                    # CSV全体を文字列として取得（長大すぎる場合は先頭部分のみ使用）
+                    # CSV全体を文字列として取得（長大な場合は先頭のみ）
                     csv_text = uploaded_file.getvalue().decode("utf-8")
                     max_chars = 4000
                     if len(csv_text) > max_chars:
                         csv_text = csv_text[:max_chars] + "\n...（以下省略）"
-                    
                     total_draws = df.shape[0]
                     lottery_prompt = (
                         f"以下は、過去{total_draws}回分のロト6抽選結果のCSVデータです。\n"
@@ -203,41 +235,20 @@ def main():
                         "組5: 31, 32, 33, 34, 35, 36\n"
                         "※予測が不確実でも必ず5組出力してください。"
                     )
-                    
                     current_progress = 50
                     progress_bar.progress(current_progress)
                     status_text.text("Gemini APIへ予測依頼中...")
-                    
-                    # Gemini API呼び出し
                     predictions = get_gemini_predictions(gemini_api_key, lottery_prompt)
-                    
                     current_progress = 80
                     progress_bar.progress(current_progress)
                     status_text.text("Gemini APIからの応答取得中...")
-
                     st.markdown("### Gemini API の予測結果")
                     if predictions:
-                        # 生成されたテキストを全て表示
-                        # predictions はリスト形式(複数行のテキストが入る想定)
                         for i, pred in enumerate(predictions, 1):
                             st.write(f"【候補{i}】\n{pred}")
                     else:
                         st.warning("APIから有効な予測結果が得られませんでした。")
-                
                 else:
-                    # 機械学習による分析の場合
-                    X = df.iloc[:, 1:7].values
-                    y = df.iloc[:, 1].values
-                    X_scaled, y_processed = preprocess_data(X, y)
-
-                    X_train, X_test, y_train, y_test = train_test_split(
-                        X_scaled, y, test_size=0.2, random_state=42, stratify=y
-                    )
-                    
-                    current_progress = 50
-                    progress_bar.progress(current_progress)
-                    status_text.text("データ分割中...")
-                    
                     if analysis_method == "ニューラルネットワーク (単純)":
                         model = build_nn_model(
                             input_dim=X_train.shape[1],
@@ -259,19 +270,16 @@ def main():
                         st.markdown("### ニューラルネットワークの評価結果")
                         st.write(f"テストデータでの損失: {loss:.4f}")
                         st.write(f"テストデータでの精度: {accuracy:.4f}")
-                    
                     elif analysis_method == "ランダムフォレスト":
                         rf_model = build_rf_model()
                         rf_model.fit(X_train, y_train)
                         y_pred = rf_model.predict(X_test)
                         st.markdown("### ランダムフォレストの分類レポート")
                         st.text(classification_report(y_test, y_pred))
-                    
                     elif analysis_method == "Optuna + ニューラルネットワーク":
                         best_params = optimize_hyperparameters(X_train, y_train, len(np.unique(y)))
                         st.markdown("### Optuna による最適パラメータ")
                         st.write(best_params)
-                        
                         best_model = build_nn_model(
                             input_dim=X_train.shape[1],
                             units=best_params['units'],
@@ -293,7 +301,6 @@ def main():
                         st.markdown("### Optuna + ニューラルネットワークの評価結果")
                         st.write(f"テストデータでの損失: {loss:.4f}")
                         st.write(f"テストデータでの精度: {accuracy:.4f}")
-                
                 current_progress = 100
                 progress_bar.progress(current_progress)
                 status_text.text("処理完了！")
