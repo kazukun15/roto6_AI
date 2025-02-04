@@ -43,11 +43,9 @@ def preprocess_data(X, y):
     """
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    
-    # scikit-learnの最新バージョンでは、sparse_output引数を使用します
+    # 最新のscikit-learnでは、sparse_output引数を使用します
     encoder = OneHotEncoder(sparse_output=False)
     y_encoded = encoder.fit_transform(y.reshape(-1, 1))
-    
     n_classes = y_encoded.shape[1]
     return X_scaled, y_encoded, n_classes
 
@@ -145,7 +143,7 @@ def get_gemini_predictions(api_key, data):
 def get_openai_o3mini_predictions(api_key, data):
     """
     OpenAI o3-mini APIにデータを送り、予測結果を取得します。
-
+    
     Parameters:
         api_key (str): OpenAI APIの認証キー。
         data (str): 予測に使用するデータ（文字列化されたデータ）。
@@ -155,12 +153,13 @@ def get_openai_o3mini_predictions(api_key, data):
     """
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
+        # OpenAIのAPI認証では、ヘッダーに "Bearer <APIキー>" を含めます（参考：https://platform.openai.com/docs/api-reference/authentication）
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
     payload = {
-        # API呼び出しでは、正式なモデルIDは「03-mini-2025-01-31」とする必要があります
+        # 正式なモデルIDは、システムカード等の最新情報に基づき「03-mini-2025-01-31」と指定します
         "model": "03-mini-2025-01-31",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
