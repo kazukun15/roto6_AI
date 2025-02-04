@@ -90,35 +90,47 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
     study.optimize(objective, n_trials=20)
     return study.best_params
 
-# --- Gemini API 呼び出し関数 (修正版) ---
+# --- Gemini API 呼び出し関数 (gemini-1.5-flash 版) ---
 def get_gemini_predictions(api_key, prompt_text):
     """
-    PaLM (Gemini) API に、指定のプロンプトを送り予測結果を取得します。
-    現行の一般的な使用例として "generateText" を使用。
+    Gemini (gemini-1.5-flash:generateContent) に指定のプロンプトを送り、
+    生成テキスト（複数行）をリストとして返します。
+    
+    事前に cURL でも同じエンドポイントを呼び出して200が返っていることが前提。
     """
-    # 例: text-bison-001 や chat-bison-001 なども利用可能（要API確認）
-    model_name = "text-bison-001"  # gemini-1.5-flash が使える場合はそちらを指定
-    url = f"https://generativelanguage.googleapis.com/v1beta2/models/{model_name}:generateText?key={api_key}"
-
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
-
-    # PaLM API では "prompt" を top-level に置き、"temperature" や "candidate_count" を指定する
     payload = {
-        "prompt": {
-            "text": prompt_text
-        },
-        "temperature": 0.2,
-        "candidate_count": 1
+        "contents": [{
+            "parts": [{"text": prompt_text}]
+        }]
     }
-
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
-        # レスポンス本体は "candidates" キーが一般的
-        candidates = response.json().get("candidates", [])
-        # candidates が空でなければ、各候補の "output" に文章が格納されていることが多い
-        outputs = [cand.get("output", "") for cand in candidates]
-        return outputs
+        data = response.json()
+        
+        # data の中身は下記のような構造が期待される (2025年現在の想定例):
+        # {
+        #   "contents": [
+        #     {
+        #       "parts": [
+        #         { "text": "ここにモデル応答のテキスト" }
+        #       ]
+        #     }
+        #   ]
+        # }
+        # 実際に返るJSON構造は必ず print(data) 等でご確認ください。
+        result_texts = []
+        contents = data.get("contents", [])
+        for content_item in contents:
+            parts = content_item.get("parts", [])
+            for part in parts:
+                text_val = part.get("text", "").strip()
+                if text_val:
+                    result_texts.append(text_val)
+        return result_texts
+
     except requests.exceptions.RequestException as e:
         st.error(f"Gemini APIエラー: {e}")
         return []
@@ -172,15 +184,13 @@ def main():
                     if gemini_api_key == "":
                         st.warning("Gemini API Keyをサイドバーに入力してください。")
                         return
-                    # CSV全体を文字列として取得（長大すぎる場合は一部のみ使用）
+                    # CSV全体を文字列として取得（長大すぎる場合は先頭部分のみ使用）
                     csv_text = uploaded_file.getvalue().decode("utf-8")
-                    max_chars = 4000  # 適宜変更
+                    max_chars = 4000
                     if len(csv_text) > max_chars:
                         csv_text = csv_text[:max_chars] + "\n...（以下省略）"
                     
-                    # CSVの件数から情報を作成
                     total_draws = df.shape[0]
-                    
                     lottery_prompt = (
                         f"以下は、過去{total_draws}回分のロト6抽選結果のCSVデータです。\n"
                         f"{csv_text}\n\n"
@@ -198,7 +208,7 @@ def main():
                     progress_bar.progress(current_progress)
                     status_text.text("Gemini APIへ予測依頼中...")
                     
-                    # 修正版Gemini API呼び出し
+                    # Gemini API呼び出し
                     predictions = get_gemini_predictions(gemini_api_key, lottery_prompt)
                     
                     current_progress = 80
@@ -207,17 +217,15 @@ def main():
 
                     st.markdown("### Gemini API の予測結果")
                     if predictions:
-                        # 1つの候補だけ返ってくる想定
+                        # 生成されたテキストを全て表示
+                        # predictions はリスト形式(複数行のテキストが入る想定)
                         for i, pred in enumerate(predictions, 1):
-                            st.write(f"候補{i}:")
-                            st.write(pred)
+                            st.write(f"【候補{i}】\n{pred}")
                     else:
                         st.warning("APIから有効な予測結果が得られませんでした。")
                 
                 else:
                     # 機械学習による分析の場合
-                    # CSVの「本数字6個」部分（列2～7）を特徴量 X とし、
-                    # ターゲットは便宜上そのうちの1列（例：列2）を使用
                     X = df.iloc[:, 1:7].values
                     y = df.iloc[:, 1].values
                     X_scaled, y_processed = preprocess_data(X, y)
