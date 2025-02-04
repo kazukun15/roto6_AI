@@ -12,9 +12,13 @@ import optuna
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 import requests
-import openai  # OpenAI SDK v1.0.0以降対応
+import openai  # OpenAI SDK v1.0.0以降用
 
-# st.set_page_config() は最上部に記述する必要があります
+# 本番環境では絶対に直接コードにAPIキーを記述しないようにしてください！
+# ここでは例として直接キーを設定しています。
+openai.api_key = "YOUR_OPENAI_API_KEY"
+
+# st.set_page_config() は最初に呼び出す必要があります
 st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
 
 # oneDNN の最適化を無効化（必要に応じて）
@@ -155,7 +159,7 @@ def get_openai_o3mini_predictions_sdk(api_key, data, use_high=False):
     """
     openai.api_key = api_key
     prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
-    # 正式なモデルIDは、"o3-mini-2025-01-31" または高い推論の場合は "o3-mini-high-2025-01-31" を指定
+    # 正式なモデルIDを指定します。参考：最新のAPIリファレンス
     model_id = "o3-mini-high-2025-01-31" if use_high else "o3-mini-2025-01-31"
     try:
         response = openai.ChatCompletion.create(
@@ -206,6 +210,8 @@ def main():
 
     # サイドバー：APIキー入力と高推論モード切替
     st.sidebar.header("APIキー設定")
+    # 以下は直接コードにキーを埋め込む例です（本番環境では推奨されません）
+    # openai_api_key = "YOUR_OPENAI_API_KEY"
     openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
     gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
     use_high = st.sidebar.checkbox("高い推論 (o3-mini-high を利用)", value=False)
