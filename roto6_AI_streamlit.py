@@ -22,8 +22,7 @@ st.title("ロト6データ分析アプリ")
 st.markdown("""
 このアプリは、過去のロト6抽選結果のCSVデータに基づいて、  
 次回のロト6抽選で出現する可能性が高いと予想される本数字6個の組み合わせを出力するデモです。  
-※ Gemini APIによる予測と、機械学習（ニューラルネットワーク、ランダムフォレスト、Optuna最適化）の分析、  
-そしてシンプルな【予想機能】（各数字の出現頻度に基づく予測）を実装しています。  
+※ Gemini APIによる予測、機械学習による分析、そしてシンプルな【予想機能】（出現頻度に基づく予想）を実装しています。  
 ※ CSVの形式は「抽選回, 本数字1, 本数字2, ..., 本数字6, B数字, ｾｯﾄ」としてください。
 """)
 
@@ -132,30 +131,26 @@ def print_predicted_numbers_top6(prob_array, n=5):
         top6 = sorted_indices[:6] + 1
         st.write(f"組{i+1}: {', '.join(map(str, top6))}")
 
-# --- 予想機能：出現頻度に基づく予測 ---
-def predict_by_frequency(df):
+# --- 予想機能（出現頻度に基づくシンプル予想） ---
+def predict_by_frequency(df, groups=5):
     """
-    CSVの「本数字1」～「本数字6」列（インデックス1～6）を全行対象に
-    各数字の出現頻度を集計し、確率に基づいて重複なく6個の数字を予測します。
-    ※ロト6では数字は通常1～43と仮定します。
+    CSVの「本数字1」～「本数字6」列（インデックス1～7と仮定）から全行の数字を集計し、
+    各数字の出現頻度に基づいて、重み付きランダムサンプリングで6個ずつの組み合わせを
+    groups組（デフォルト5組）作成して返します。  
+    ロト6は数字1～43と仮定します。
     """
-    # 本数字の列を抽出（CSVの2列目～7列目と仮定）
+    # 本数字の列を抽出（2列目～7列目）
     try:
         number_cols = df.columns[1:7]
     except Exception as e:
         st.error("本数字の列が取得できません。CSVの形式を確認してください。")
         return None
-    # 数値に変換
-    try:
-        numbers = df[number_cols].apply(pd.to_numeric, errors='coerce').values.flatten()
-    except Exception as e:
-        st.error("本数字の列を数値に変換できませんでした。")
-        return None
-    # 有効な数値のみ（NaN除外）
+    # 数値に変換して1次元配列にする
+    numbers = df[number_cols].apply(pd.to_numeric, errors='coerce').values.flatten()
     numbers = numbers[~pd.isna(numbers)]
-    # 出現回数を集計
+    # 集計
     freq = pd.Series(numbers).value_counts().sort_index()
-    # ロト6は通常1～43の数字とする（数字が存在しない場合は0とする）
+    # 数字1～43を全てカバー（存在しない数字は0とする）
     all_numbers = pd.Series(0, index=np.arange(1, 44))
     freq = all_numbers.add(freq, fill_value=0)
     total = freq.sum()
@@ -163,9 +158,12 @@ def predict_by_frequency(df):
         st.error("本数字の出現データが存在しません。")
         return None
     weights = (freq / total).values
-    # 6個の数字を重複なしでサンプリング（重み付け）
-    predicted = np.random.choice(freq.index, size=6, replace=False, p=weights)
-    return np.sort(predicted)
+    predicted_groups = []
+    # groups回繰り返しでサンプリング
+    for _ in range(groups):
+        predicted = np.random.choice(freq.index, size=6, replace=False, p=weights)
+        predicted_groups.append(np.sort(predicted))
+    return predicted_groups
 
 # --- メイン処理 ---
 def main():
@@ -195,8 +193,8 @@ def main():
             status_text.text("分析準備中...")
             
             # --- 機械学習による分析例 ---
-            # 例として、列インデックス1～6（本数字1～本数字6）を特徴量、
-            # 「本数字1」列をターゲットとする（あくまで例です）。
+            # 例として、列インデックス1～7（本数字1～本数字6）を特徴量、
+            # 「本数字1」列をターゲットとする（あくまで例です）
             X = df.iloc[:, 1:7].values
             y = df.iloc[:, 1].values
             X_scaled, y_processed = preprocess_data(X, y)
@@ -208,6 +206,7 @@ def main():
             progress_bar.progress(current_progress)
             status_text.text("API/機械学習用データ準備完了")
             
+            # 分析開始ボタン
             if st.button("分析を開始する"):
                 if analysis_method == "Gemini API":
                     if gemini_api_key == "":
@@ -268,8 +267,9 @@ def main():
                     rf_model = build_rf_model()
                     rf_model.fit(X_train, y_train)
                     y_pred = rf_model.predict(X_test)
-                    st.markdown("### ランダムフォレストの分類レポート")
-                    st.text(classification_report(y_test, y_pred))
+                    st.markdown("### ランダムフォレストの予測結果")
+                    st.write("実際の値:", y_test)
+                    st.write("予測値:", y_pred)
                 elif analysis_method == "Optuna + ニューラルネットワーク":
                     best_params = optimize_hyperparameters(X_train, y_train, len(np.unique(y)))
                     st.markdown("### Optuna による最適パラメータ")
@@ -299,12 +299,13 @@ def main():
                 progress_bar.progress(current_progress)
                 status_text.text("処理完了！")
             
-            # --- 予想機能（出現頻度に基づくシンプル予測） ---
+            # --- 予想機能（出現頻度に基づくシンプル予想） ---
             if st.button("予想機能を実行する"):
-                predicted_numbers = predict_by_frequency(df)
-                if predicted_numbers is not None:
-                    st.markdown("### 次回の予想数字")
-                    st.write(", ".join(map(str, predicted_numbers)))
+                predicted_groups = predict_by_frequency(df, groups=5)
+                if predicted_groups is not None:
+                    st.markdown("### 次回の予想数字（5組）")
+                    for i, group in enumerate(predicted_groups, 1):
+                        st.write(f"組{i}: {', '.join(map(str, group))}")
             
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
