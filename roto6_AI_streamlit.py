@@ -41,7 +41,7 @@ def preprocess_data(X, y):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # sklearnのバージョンに合わせてsparse_outputまたはsparseを指定
+    # scikit-learnのバージョンにより、sparseまたはsparse_outputを指定します。
     encoder = OneHotEncoder(sparse=False)
     y_encoded = encoder.fit_transform(y.reshape(-1, 1))
 
@@ -203,6 +203,11 @@ def main():
     st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
     st.title("ロト6データ分析アプリ")
 
+    # サイドバーにAPIキー入力欄を追加
+    st.sidebar.header("APIキー設定")
+    openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
+    gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
+
     # 以下はアプリ全体のフローイメージ（Mermaid記法）
     """
     ```mermaid
@@ -270,7 +275,9 @@ def main():
                 status_text.text("モデルの学習またはAPI呼び出しを開始します...")
 
                 if analysis_method == "Gemini API":
-                    gemini_api_key = st.secrets["GEMINI_API_KEY"]
+                    if gemini_api_key == "":
+                        st.warning("Gemini API Keyをサイドバーに入力してください。")
+                        return
                     predictions = get_gemini_predictions(gemini_api_key, X_test)
                     current_progress = 80
                     progress_bar.progress(current_progress)
@@ -339,7 +346,9 @@ def main():
                     print_predicted_numbers_top6(pred_probs, n=5)
 
                 elif analysis_method == "OpenAI o3-mini":
-                    openai_api_key = st.secrets["OPENAI_API_KEY"]
+                    if openai_api_key == "":
+                        st.warning("OpenAI API Keyをサイドバーに入力してください。")
+                        return
                     # 例としてX_testの先頭サンプルの数値データを文字列化して送信
                     sample_data = str(X_test[0].tolist())
                     prediction = get_openai_o3mini_predictions(openai_api_key, sample_data)
