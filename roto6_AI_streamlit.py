@@ -160,8 +160,8 @@ def get_openai_o3mini_predictions(api_key, data):
     }
     prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
     payload = {
-        # モデルIDを "03-mini-2025-01-31" に更新
-        "model": "03-mini-2025-01-31",
+        # モデルIDを「o3-mini」に変更（参考: OpenAI公式ページ :contentReference[oaicite:0]{index=0}）
+        "model": "o3-mini",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
         "max_tokens": 150
