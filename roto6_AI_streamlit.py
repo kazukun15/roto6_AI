@@ -8,7 +8,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.optimizers import Adam
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 import optuna
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, r2_score
@@ -151,6 +151,13 @@ def main():
             status_text.text("CSV読み込み中...")
             df = load_data(uploaded_file)
             st.success("CSVデータを正常に読み込みました！")
+            # ヘッダーを表示（利用可能なカラム一覧）
+            st.write("CSVのカラム:", df.columns.tolist())
+            # 'cmp1' カラムの存在チェック
+            if 'cmp1' not in df.columns:
+                st.error("エラー: 'cmp1' カラムが存在しません。CSVのヘッダーを確認してください。")
+                return
+            
             with st.expander("CSVデータプレビュー"):
                 st.dataframe(df.head(10))
             current_progress = 30
@@ -158,14 +165,13 @@ def main():
             status_text.text("分析準備中...")
             
             # ----- グループ分割（分子ID "cmp1" によりグループ化） -----
-            # グループごとに分割し、サンプル数が1件のみのグループは後で全てトレーニングに追加
             grouped = df.groupby('cmp1')
             dfs = {key: group for key, group in grouped}
-            # 分子を2群に分割：複数サンプルを持つもの（>=2）と1サンプルのみのもの
+            # 複数サンプルを持つ分子（>=2件）と1件のみの分子に分割
             multi_sample = {k: v for k, v in dfs.items() if len(v) > 1}
             single_sample = {k: v for k, v in dfs.items() if len(v) == 1}
             
-            # 複数サンプルを持つ分子について、従来のルールで分割
+            # 複数サンプルの分子について従来のルールで分割
             train_dfs_multi = {}
             test_dfs_multi = {}
             for key, item in multi_sample.items():
@@ -186,38 +192,32 @@ def main():
                 train_dfs_multi[key] = train_df
                 test_dfs_multi[key] = test_df
             
-            # 単一サンプルのみの分子はすべてトレーニングセットに追加
+            # 単一サンプルのみの分子はすべてトレーニングに追加
             train_dfs_single = single_sample
             
-            # 連結して最終的なトレーニングデータとテストデータを作成
+            # 連結して最終的なトレーニング／テストデータを作成
             train_df_final = pd.concat(list(train_dfs_multi.values()) + list(train_dfs_single.values()))
-            # テストは複数サンプルのみの分子から
             test_df_final = pd.concat(list(test_dfs_multi.values())) if test_dfs_multi else pd.DataFrame(columns=df.columns)
             # ----- データ分割終了 -----
             
-            # 更新した進捗
             current_progress = 50
             progress_bar.progress(current_progress)
             status_text.text("Gemini API/機械学習用データ準備中...")
             
-            # ここでは例として、機械学習分析用の処理（CSV中の数値データを使用）
-            # ※CSVの列構成に合わせて、特徴量・ターゲットの指定を行ってください
-            # ここでは例として、列インデックス 1～6 を特徴量、1列目をターゲットとして使用
+            # ※ 以下は例として、CSV中の数値データを使用する場合の処理例です
+            # 特徴量・ターゲットの列はCSVの構成に合わせて適宜変更してください
             X = train_df_final.iloc[:, 1:7].values
-            y = train_df_final.iloc[:, 1].values  # ターゲットは例として1列目
+            y = train_df_final.iloc[:, 1].values  # 例として1列目をターゲットに使用
             X_scaled, y_processed = preprocess_data(X, y)
-            # ※ stratify を使用した分割が不要な場合は、単純に分割
             X_train, X_test, y_train, y_test = train_test_split(
                 X_scaled, y, test_size=0.2, random_state=42
             )
             
-            # 以下、選択した分析方法に応じた処理
             if st.button("分析を開始する"):
                 if analysis_method == "Gemini API":
                     if gemini_api_key == "":
                         st.warning("Gemini API Keyをサイドバーに入力してください。")
                         return
-                    # CSV全体を文字列として取得（長大な場合は先頭のみ）
                     csv_text = uploaded_file.getvalue().decode("utf-8")
                     max_chars = 4000
                     if len(csv_text) > max_chars:
