@@ -12,12 +12,12 @@ import optuna
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 import requests
-import openai  # OpenAI SDK v1.0.0以降用
+import openai  # OpenAI SDK v1.0.0以降対応
 
-# st.set_page_config() は最初に呼び出す
+# st.set_page_config() は最上部に記述する必要があります
 st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
 
-# oneDNNの最適化を無効化（必要に応じて）
+# oneDNN の最適化を無効化（必要に応じて）
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 tf.get_logger().setLevel('ERROR')
 
@@ -148,15 +148,15 @@ def get_openai_o3mini_predictions_sdk(api_key, data, use_high=False):
     Parameters:
         api_key (str): OpenAI API の認証キー。
         data (str): 予測に使用するデータ（文字列化されたデータ）。
-        use_high (bool): True の場合、o3-mini-high を利用。
+        use_high (bool): True の場合、o3-mini-high を利用（高い推論モード）。
     
     Returns:
         str: 予測されたテキスト結果。
     """
     openai.api_key = api_key
     prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
-    # 新しいインターフェースに合わせ、正式なモデルIDとして「03-mini-2025-01-31」または「03-mini-high-2025-01-31」を指定します
-    model_id = "03-mini-high-2025-01-31" if use_high else "03-mini-2025-01-31"
+    # 正式なモデルIDは、"o3-mini-2025-01-31" または高い推論の場合は "o3-mini-high-2025-01-31" を指定
+    model_id = "o3-mini-high-2025-01-31" if use_high else "o3-mini-2025-01-31"
     try:
         response = openai.ChatCompletion.create(
             model=model_id,
