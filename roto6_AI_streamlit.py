@@ -13,47 +13,51 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 import requests
 
-# oneDNN無効化（必要に応じて）
+# oneDNNの最適化を無効化（必要に応じて）
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 tf.get_logger().setLevel('ERROR')
 
+
 #############################
-# データ読み込み＆前処理関数
+# CSVファイル読み込み＆前処理関数
 #############################
 def load_data(uploaded_file):
     """
-    CSVファイルを読み込み、数値列のみ抜き出し、
-    最後の列をラベルとして返す。
+    CSVファイルを読み込み、数値列のみを抽出し、
+    最後の列をラベルとして返します。
     """
     df = pd.read_csv(uploaded_file)
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     if len(numeric_cols) < 2:
         st.error("CSVファイルには少なくとも2つの数値列が必要です。")
         st.stop()
-    X = df[numeric_cols].iloc[:, :-1].values  # 特徴量
-    y = df[numeric_cols].iloc[:, -1].values   # ラベル
+    X = df[numeric_cols].iloc[:, :-1].values  # 特徴量部分
+    y = df[numeric_cols].iloc[:, -1].values   # ラベル部分
     return np.array(X), np.array(y)
+
 
 def preprocess_data(X, y):
     """
-    データをスケーリングし、ラベルをOne-Hotエンコードした結果を返す。
+    データのスケーリングとラベルのOne-Hotエンコードを行い、
+    スケーリング済みの特徴量、エンコード済みラベル、クラス数を返します。
     """
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-
-    # scikit-learnのバージョンにより、sparseまたはsparse_outputを指定します。
-    encoder = OneHotEncoder(sparse=False)
+    
+    # scikit-learnの最新バージョンでは、sparse_output引数を使用します
+    encoder = OneHotEncoder(sparse_output=False)
     y_encoded = encoder.fit_transform(y.reshape(-1, 1))
-
+    
     n_classes = y_encoded.shape[1]
     return X_scaled, y_encoded, n_classes
 
+
 #############################
-# モデル構築関数
+# ニューラルネットワークモデル構築関数
 #############################
 def build_nn_model(input_dim, units, dropout, learning_rate, n_classes):
     """
-    ニューラルネットワーク（全結合）モデルを構築
+    全結合ニューラルネットワークモデルを構築します。
     """
     model = Sequential([
         Dense(units, activation='relu', input_dim=input_dim),
@@ -66,19 +70,24 @@ def build_nn_model(input_dim, units, dropout, learning_rate, n_classes):
     model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
     return model
 
+
+#############################
+# ランダムフォレストモデル構築関数
+#############################
 def build_rf_model():
     """
-    ランダムフォレストモデルを構築
+    ランダムフォレストモデルを構築します。
     """
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     return model
 
+
 #############################
-# ハイパーパラメータ最適化関数
+# ハイパーパラメータ最適化関数（Optuna使用）
 #############################
 def optimize_hyperparameters(X_train, y_train, n_classes):
     """
-    Optunaでニューラルネットワークのハイパーパラメータを最適化
+    Optunaを使ってニューラルネットワークのハイパーパラメータを最適化します。
     """
     def objective(trial):
         units = trial.suggest_int('units', 32, 256, step=32)
@@ -102,12 +111,13 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
     study.optimize(objective, n_trials=20)
     return study.best_params
 
+
 #############################
 # Gemini API呼び出し関数
 #############################
 def get_gemini_predictions(api_key, data):
     """
-    Gemini APIにデータを送り、予測結果を受け取ります。
+    Gemini APIにデータを送り、予測結果を取得します。
     """
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
     headers = {
@@ -128,19 +138,20 @@ def get_gemini_predictions(api_key, data):
         st.error(f"Gemini APIエラー: {e}")
         return []
 
+
 #############################
 # OpenAI o3-mini API呼び出し関数
 #############################
 def get_openai_o3mini_predictions(api_key, data):
     """
-    OpenAI o3-mini APIにデータを送り、予測結果を受け取ります。
+    OpenAI o3-mini APIにデータを送り、予測結果を取得します。
 
     Parameters:
         api_key (str): OpenAI APIの認証キー。
         data (str): 予測に使用するデータ（文字列化されたデータ）。
-
+    
     Returns:
-        str: 予測されたテキストの結果。
+        str: 予測されたテキスト結果。
     """
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -149,7 +160,7 @@ def get_openai_o3mini_predictions(api_key, data):
     }
     prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
     payload = {
-        "model": "o3-mini",  # 必要に応じて "o3-mini-high" を指定可能
+        "model": "o3-mini",  # "o3-mini-high" も利用可能
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
         "max_tokens": 150
@@ -164,13 +175,11 @@ def get_openai_o3mini_predictions(api_key, data):
         st.error(f"OpenAI o3-mini APIエラー: {e}")
         return ""
 
+
 #############################
-# コールバッククラス
+# 学習進捗をStreamlitのプログレスバーに反映するコールバック
 #############################
 class ProgressBarCallback(tf.keras.callbacks.Callback):
-    """
-    ニューラルネットワーク学習の進捗をStreamlitのプログレスバーに反映するコールバック
-    """
     def __init__(self, progress_bar, total_epochs):
         super().__init__()
         self.progress_bar = progress_bar
@@ -182,13 +191,11 @@ class ProgressBarCallback(tf.keras.callbacks.Callback):
         progress_rate = int(100 * self.current_epoch / self.total_epochs)
         self.progress_bar.progress(progress_rate)
 
+
 #############################
-# 予想数字の上位6クラスを5組出力
+# 予測確率から上位6クラスの数字を5組出力する関数
 #############################
 def print_predicted_numbers_top6(prob_array, n=5):
-    """
-    予測確率から、各サンプルの上位6クラスを5組表示する。
-    """
     st.write("#### 予想される数字（各サンプルの上位6クラス）")
     for i in range(min(n, prob_array.shape[0])):
         sorted_indices = np.argsort(prob_array[i])[::-1]
@@ -196,19 +203,20 @@ def print_predicted_numbers_top6(prob_array, n=5):
         top6_plus1 = top6 + 1  # クラスが0始まりの場合、1を加算
         st.write(f"サンプル{i+1} → 予想数字: {list(top6_plus1)}")
 
+
 #############################
-# Streamlitアプリケーション
+# Streamlitアプリケーション本体
 #############################
 def main():
     st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
     st.title("ロト6データ分析アプリ")
 
-    # サイドバーにAPIキー入力欄を追加
+    # サイドバーにAPIキー入力欄を追加（ユーザーが直接入力）
     st.sidebar.header("APIキー設定")
     openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
     gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
 
-    # 以下はアプリ全体のフローイメージ（Mermaid記法）
+    # ※以下、Mermaid記法による全体フロー図（コメント内）
     """
     ```mermaid
     flowchart TD
@@ -240,6 +248,7 @@ def main():
     status_text = st.empty()
     current_progress = 0
 
+    # CSVファイルのアップロード
     uploaded_file = st.file_uploader("CSVファイルをアップロードしてください", type="csv")
     if uploaded_file is not None:
         try:
@@ -349,7 +358,7 @@ def main():
                     if openai_api_key == "":
                         st.warning("OpenAI API Keyをサイドバーに入力してください。")
                         return
-                    # 例としてX_testの先頭サンプルの数値データを文字列化して送信
+                    # 例としてX_testの先頭サンプルの数値データを文字列に変換して送信
                     sample_data = str(X_test[0].tolist())
                     prediction = get_openai_o3mini_predictions(openai_api_key, sample_data)
                     st.write("#### OpenAI o3-mini APIの予測結果:")
