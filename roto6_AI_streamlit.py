@@ -44,7 +44,7 @@ def preprocess_data(X, y):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    # 最新のscikit-learnでは、sparse_output引数を使用します
+    # scikit-learnの最新バージョンでは、sparse_output引数を使用します
     encoder = OneHotEncoder(sparse_output=False)
     y_encoded = encoder.fit_transform(y.reshape(-1, 1))
     
@@ -160,8 +160,8 @@ def get_openai_o3mini_predictions(api_key, data):
     }
     prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
     payload = {
-        # モデルIDを「o3-mini」に変更（参考: OpenAI公式ページ :contentReference[oaicite:0]{index=0}）
-        "model": "o3-mini",
+        # API呼び出しでは、正式なモデルIDは「03-mini-2025-01-31」とする必要があります
+        "model": "03-mini-2025-01-31",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
         "max_tokens": 150
