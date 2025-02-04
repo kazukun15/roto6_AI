@@ -12,16 +12,12 @@ import optuna
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 import requests
-import openai  # OpenAI SDK v1.0.0以降用
-
-# 本番環境では絶対に直接コードにAPIキーを記述しないようにしてください！
-# ここでは例として直接キーを設定しています。
-openai.api_key = "YOUR_OPENAI_API_KEY"
+# OpenAI SDK は今回利用しません
 
 # st.set_page_config() は最初に呼び出す必要があります
 st.set_page_config(page_title="ロト6データ分析アプリ", layout="wide")
 
-# oneDNN の最適化を無効化（必要に応じて）
+# oneDNNの最適化を無効化（必要に応じて）
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 tf.get_logger().setLevel('ERROR')
 
@@ -86,7 +82,7 @@ def build_rf_model():
 
 
 #############################
-# ハイパーパラメータ最適化関数（Optuna使用）
+# ハイパーパラメータ最適化関数（Optuna 使用）
 #############################
 def optimize_hyperparameters(X_train, y_train, n_classes):
     """
@@ -143,38 +139,6 @@ def get_gemini_predictions(api_key, data):
 
 
 #############################
-# OpenAI o3-mini API 呼び出し関数 (SDK 利用版)
-#############################
-def get_openai_o3mini_predictions_sdk(api_key, data, use_high=False):
-    """
-    OpenAI SDK を利用して、o3-mini もしくは o3-mini-high モデルにデータを送り、予測結果を取得します。
-    
-    Parameters:
-        api_key (str): OpenAI API の認証キー。
-        data (str): 予測に使用するデータ（文字列化されたデータ）。
-        use_high (bool): True の場合、o3-mini-high を利用（高い推論モード）。
-    
-    Returns:
-        str: 予測されたテキスト結果。
-    """
-    openai.api_key = api_key
-    prompt = f"以下のデータに基づいて、予測結果を生成してください:\n{data}"
-    # 正式なモデルIDを指定します。参考：最新のAPIリファレンス
-    model_id = "o3-mini-high-2025-01-31" if use_high else "o3-mini-2025-01-31"
-    try:
-        response = openai.ChatCompletion.create(
-            model=model_id,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=150
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        st.error(f"OpenAI o3-mini APIエラー: {e}")
-        return ""
-
-
-#############################
 # プログレスバー更新用コールバック
 #############################
 class ProgressBarCallback(tf.keras.callbacks.Callback):
@@ -208,13 +172,11 @@ def print_predicted_numbers_top6(prob_array, n=5):
 def main():
     st.title("ロト6データ分析アプリ")
 
-    # サイドバー：APIキー入力と高推論モード切替
+    # サイドバー：APIキー入力（今回は OpenAI o3-mini API の部分を削除するので、ここは Gemini API キーのみでも可）
     st.sidebar.header("APIキー設定")
-    # 以下は直接コードにキーを埋め込む例です（本番環境では推奨されません）
-    # openai_api_key = "YOUR_OPENAI_API_KEY"
-    openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
+    # openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
     gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
-    use_high = st.sidebar.checkbox("高い推論 (o3-mini-high を利用)", value=False)
+    # OpenAI の o3-mini は利用しないため、分析方法から除外
 
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -235,9 +197,10 @@ def main():
             progress_bar.progress(current_progress)
             status_text.text("前処理を実行中...")
 
+            # 分析方法から OpenAI o3-mini の項目を削除し、他の分析方法のみを選択
             analysis_method = st.radio(
                 "分析方法を選択してください",
-                ("ニューラルネットワーク (単純)", "ランダムフォレスト", "Optuna + ニューラルネットワーク", "Gemini API", "OpenAI o3-mini")
+                ("ニューラルネットワーク (単純)", "ランダムフォレスト", "Optuna + ニューラルネットワーク", "Gemini API")
             )
 
             if st.button("分析を開始する"):
@@ -325,15 +288,6 @@ def main():
                     st.write(f"テストデータでの精度: {accuracy:.4f}")
                     pred_probs = best_model.predict(X_test[:5])
                     print_predicted_numbers_top6(pred_probs, n=5)
-
-                elif analysis_method == "OpenAI o3-mini":
-                    if openai_api_key == "":
-                        st.warning("OpenAI API Keyをサイドバーに入力してください。")
-                        return
-                    sample_data = str(X_test[0].tolist())
-                    prediction = get_openai_o3mini_predictions_sdk(openai_api_key, sample_data, use_high=use_high)
-                    st.write("#### OpenAI o3-mini APIの予測結果:")
-                    st.write(prediction)
 
                 current_progress = 100
                 progress_bar.progress(current_progress)
