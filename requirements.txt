@@ -5,4 +5,4 @@ tensorflow
 scikit-learn
 optuna
 requests
-openai>=1.0.0
+openai==0.28
