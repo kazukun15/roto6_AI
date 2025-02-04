@@ -41,9 +41,7 @@ analysis_method = st.sidebar.radio(
 
 # --- CSV読み込み関数 ---
 def load_data(uploaded_file):
-    """
-    CSVファイルを読み込み、DataFrameとして返します。
-    """
+    """CSVファイルを読み込み、DataFrameとして返します。"""
     df = pd.read_csv(uploaded_file, encoding="utf-8")
     return df
 
@@ -90,7 +88,7 @@ def optimize_hyperparameters(X_train, y_train, n_classes):
     study.optimize(objective, n_trials=20)
     return study.best_params
 
-# --- Gemini API 呼び出し関数 (gemini-1.5-flash 版) ---
+# --- Gemini API 呼び出し関数 (gemini-1.5-flash:generateContent版) ---
 def get_gemini_predictions(api_key, prompt_text):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
@@ -104,10 +102,8 @@ def get_gemini_predictions(api_key, prompt_text):
         response.raise_for_status()
         data = response.json()
         result_texts = []
-        contents = data.get("contents", [])
-        for content_item in contents:
-            parts = content_item.get("parts", [])
-            for part in parts:
+        for content_item in data.get("contents", []):
+            for part in content_item.get("parts", []):
                 text_val = part.get("text", "").strip()
                 if text_val:
                     result_texts.append(text_val)
@@ -125,22 +121,20 @@ class ProgressBarCallback(tf.keras.callbacks.Callback):
         self.current_epoch = 0
     def on_epoch_end(self, epoch, logs=None):
         self.current_epoch += 1
-        progress_rate = int(100 * self.current_epoch / self.total_epochs)
-        self.progress_bar.progress(progress_rate)
+        self.progress_bar.progress(int(100 * self.current_epoch / self.total_epochs))
 
 # --- 結果出力用関数 (機械学習用) ---
 def print_predicted_numbers_top6(prob_array, n=5):
     st.write("#### 予想される数字（各組）")
     for i in range(min(n, prob_array.shape[0])):
         sorted_indices = np.argsort(prob_array[i])[::-1]
-        top6 = sorted_indices[:6]
-        top6_plus1 = top6 + 1
-        st.write(f"組{i+1}: {', '.join(map(str, top6_plus1))}")
+        top6 = sorted_indices[:6] + 1
+        st.write(f"組{i+1}: {', '.join(map(str, top6))}")
 
 # --- メイン処理 ---
 def main():
     st.markdown("## CSVファイルアップロード")
-    uploaded_file = st.file_uploader("過去のロト6抽選結果CSVファイルをアップロードしてください", type="csv")
+    uploaded_file = st.file_uploader("ロト6抽選結果CSVファイルをアップロードしてください", type="csv")
     
     if uploaded_file is not None:
         try:
@@ -151,11 +145,11 @@ def main():
             status_text.text("CSV読み込み中...")
             df = load_data(uploaded_file)
             st.success("CSVデータを正常に読み込みました！")
-            # ヘッダーを表示（利用可能なカラム一覧）
-            st.write("CSVのカラム:", df.columns.tolist())
-            # 'cmp1' カラムの存在チェック
-            if 'cmp1' not in df.columns:
-                st.error("エラー: 'cmp1' カラムが存在しません。CSVのヘッダーを確認してください。")
+            st.write("CSVのカラム一覧:", df.columns.tolist())
+            
+            # 必須カラム「抽選回」の存在チェック
+            if "抽選回" not in df.columns:
+                st.error("エラー: 必須カラム「抽選回」が存在しません。CSVのヘッダーを確認してください。")
                 return
             
             with st.expander("CSVデータプレビュー"):
@@ -164,60 +158,27 @@ def main():
             progress_bar.progress(current_progress)
             status_text.text("分析準備中...")
             
-            # ----- グループ分割（分子ID "cmp1" によりグループ化） -----
-            grouped = df.groupby('cmp1')
-            dfs = {key: group for key, group in grouped}
-            # 複数サンプルを持つ分子（>=2件）と1件のみの分子に分割
-            multi_sample = {k: v for k, v in dfs.items() if len(v) > 1}
-            single_sample = {k: v for k, v in dfs.items() if len(v) == 1}
-            
-            # 複数サンプルの分子について従来のルールで分割
-            train_dfs_multi = {}
-            test_dfs_multi = {}
-            for key, item in multi_sample.items():
-                n = len(item)
-                if n > 4:
-                    train_size = math.floor(0.95 * n)
-                    test_size = n - train_size
-                    if test_size > 0:
-                        train_df, test_df = item.iloc[:train_size, :], item.iloc[train_size:, :]
-                    else:
-                        train_df, test_df = item.iloc[:train_size, :], pd.DataFrame(columns=df.columns.drop('cmp1'))
-                elif n == 4:
-                    train_df, test_df = item.iloc[:3, :], item.iloc[3:, :]
-                elif n == 3:
-                    train_df, test_df = item.iloc[:2, :], item.iloc[2:, :]
-                elif n == 2:
-                    train_df, test_df = item.iloc[:1, :], item.iloc[1:, :]
-                train_dfs_multi[key] = train_df
-                test_dfs_multi[key] = test_df
-            
-            # 単一サンプルのみの分子はすべてトレーニングに追加
-            train_dfs_single = single_sample
-            
-            # 連結して最終的なトレーニング／テストデータを作成
-            train_df_final = pd.concat(list(train_dfs_multi.values()) + list(train_dfs_single.values()))
-            test_df_final = pd.concat(list(test_dfs_multi.values())) if test_dfs_multi else pd.DataFrame(columns=df.columns)
-            # ----- データ分割終了 -----
-            
-            current_progress = 50
-            progress_bar.progress(current_progress)
-            status_text.text("Gemini API/機械学習用データ準備中...")
-            
-            # ※ 以下は例として、CSV中の数値データを使用する場合の処理例です
-            # 特徴量・ターゲットの列はCSVの構成に合わせて適宜変更してください
-            X = train_df_final.iloc[:, 1:7].values
-            y = train_df_final.iloc[:, 1].values  # 例として1列目をターゲットに使用
+            # --- 機械学習の場合（Gemini API以外） ---
+            # ロト6の場合、各抽選回は1行ずつのデータと想定し、全体をそのまま使用します。
+            # 例として、列インデックス1～6（「本数字1」～「本数字6」）を特徴量、
+            # 「本数字1」列をターゲットとする（あくまでサンプル例です）。
+            X = df.iloc[:, 1:7].values
+            y = df.iloc[:, 1].values  # 例：本数字1をターゲットに
             X_scaled, y_processed = preprocess_data(X, y)
             X_train, X_test, y_train, y_test = train_test_split(
                 X_scaled, y, test_size=0.2, random_state=42
             )
+            
+            current_progress = 50
+            progress_bar.progress(current_progress)
+            status_text.text("API/機械学習用データ準備完了")
             
             if st.button("分析を開始する"):
                 if analysis_method == "Gemini API":
                     if gemini_api_key == "":
                         st.warning("Gemini API Keyをサイドバーに入力してください。")
                         return
+                    # CSV全体を文字列として取得（長大な場合は先頭部分のみ）
                     csv_text = uploaded_file.getvalue().decode("utf-8")
                     max_chars = 4000
                     if len(csv_text) > max_chars:
@@ -304,7 +265,6 @@ def main():
                 current_progress = 100
                 progress_bar.progress(current_progress)
                 status_text.text("処理完了！")
-        
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
     else:
